@@ -766,8 +766,7 @@ def _phase4_topic_aggregation(db):
 # Task 1: Dependency Discovery
 # ============================================================
 
-def discover_dependencies(db: QADatabase, client, difficulty_data: dict,
-                          verb_data: dict, debug_cb, progress_cb=None) -> list:
+def discover_dependencies(db: QADatabase, client, debug_cb, progress_cb=None) -> list:
     """Discover prerequisite relationships between topics.
 
     Returns: [(prerequisite, dependent, score, confidence), ...]
@@ -1157,7 +1156,7 @@ def run_offline_analysis(db_path: str, api_url: str, api_key: str,
 
         # Task 1: Dependency discovery (depends on Task 3 for cross_topic signal, Task 2 for verbs)
         _progress(66, "Discovering dependencies...")
-        discover_dependencies(db, client, difficulty_data, verb_data, _debug, _progress)
+        discover_dependencies(db, client, _debug, _progress)
 
         _progress(100, "Offline analysis complete")
     finally:

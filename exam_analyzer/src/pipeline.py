@@ -8,6 +8,7 @@ import os
 import json
 import re
 import time
+import hashlib
 import threading
 import traceback
 import statistics
@@ -363,7 +364,7 @@ def run_pipeline(
     is_first = (db.count() == 0)
     topic_links = db.get_topic_links()
 
-    tracker = ProgressTracker(len(pairs) * 80 + 10, _progress, _log)
+    tracker = ProgressTracker(len(pairs) * 70 + 10, _progress, _log)
 
     for (qp_path, ms_path, display_name) in pairs:
         if shutdown_event and shutdown_event.is_set():
@@ -495,7 +496,12 @@ def run_pipeline(
                         used_ids.add(qa_ref["id"])
                 for qa_ref in top_similar:
                     if qa_ref["id"] not in used_ids:
-                        db.record_attempt(qa_ref["id"], success=False)
+                        ref_topic = qa_ref.get("topic", "")
+                        if ref_topic and step0_topic and ref_topic != step0_topic:
+                            reason = "topic_mismatch"
+                        else:
+                            reason = "retrieval_irrelevant"
+                        db.record_attempt(qa_ref["id"], success=False, reason=reason)
 
                 # Round 2: Flash grades
                 t0 = time.time()
@@ -669,9 +675,10 @@ def run_pipeline(
         # Representative: highest Beta weight in topic
         best_qa = max(qas, key=lambda qa: weights.get(qa["id"], {}).get("mean", 0.5))
         db.conn.execute("UPDATE qa_pairs SET is_representative = 1 WHERE id = ?", (best_qa["id"],))
-        # Cross-topic: referenced by other topics in topic_links
+        # Cross-topic: references or is referenced by other topics
         for qa in qas:
-            if any(dst == topic for (src, dst) in topic_links if src != topic):
+            if any(dst == topic and src != topic for (src, dst) in topic_links) or \
+               any(src == topic and dst != topic for (src, dst) in topic_links):
                 db.conn.execute("UPDATE qa_pairs SET is_cross_topic = 1 WHERE id = ?", (qa["id"],))
     db.conn.commit()
 
@@ -1058,8 +1065,13 @@ def _distill_points(db: QADatabase, client, debug: Callable) -> str:
             '返回 JSON: {"knowledge_points": [{"concept":"...","detail":"...","pitfall":"...","scoring":"...","confidence":"high"}]}'
         )
 
+    # Load distillation cache for incremental reuse
+    cache = db.get_distillation_cache()
+
     # Pre-build topic list with precomputed text (no DB access needed in workers)
-    topic_items = []
+    topic_items = []       # topics to re-distill
+    cached_results = {}    # topic -> cached content (reused as-is)
+    skipped_count = 0
     for topic, qas in groups.items():
         if not topic or topic == "(uncategorized)":
             continue
@@ -1075,6 +1087,19 @@ def _distill_points(db: QADatabase, client, debug: Callable) -> str:
         else:
             marker = ""
         marker += meta.get("quality_flag", "")
+
+        # Compute fingerprint of the topic's QA set
+        qa_ids_sorted = sorted(qa["id"] for qa in qas)
+        qa_ids_hash = hashlib.md5(",".join(map(str, qa_ids_sorted)).encode()).hexdigest()
+        cached_state = db.get_cached_topic_state(topic)
+
+        if (cached_state
+                and cached_state["qa_count"] == len(qas)
+                and cached_state["qa_ids_hash"] == qa_ids_hash
+                and topic in cache):
+            cached_results[topic] = cache[topic]
+            skipped_count += 1
+            continue
 
         qa_texts = ""
         # Sort by Beta weight descending: high-weight QAs first for model attention
@@ -1103,12 +1128,15 @@ def _distill_points(db: QADatabase, client, debug: Callable) -> str:
                 qa_texts += ("\n注意: 此主题的题目数据有限。请仅提取答案中明确直接支持的"
                              "知识点。宁可输出少量高置信度的知识点，也不要输出多个低置信度的。\n")
 
-        topic_items.append((topic, len(qas), qa_texts, marker, qas))
+        topic_items.append((topic, len(qas), qa_texts, marker, qas, qa_ids_hash))
 
-    if not topic_items:
+    if skipped_count:
+        debug(f"Incremental: reusing {skipped_count} cached, distilling {len(topic_items)} topics")
+
+    if not topic_items and not cached_results:
         return ""
 
-    def _distill_one_topic(topic, n_qa, qa_texts, marker, qas):
+    def _distill_one_topic(topic, n_qa, qa_texts, marker, qas, qa_ids_hash):
         messages = [
             {"role": "system", "content": dist_sys},
             {"role": "user", "content": dist_usr % (topic, n_qa, qa_texts)},
@@ -1118,9 +1146,13 @@ def _distill_points(db: QADatabase, client, debug: Callable) -> str:
             kps = result.get("knowledge_points", [])
         except Exception as e:
             debug(f"  distillation failed for '{topic}': {e}")
-            kps = [{"concept": qa["answer_text"], "detail":"","pitfall":"","scoring":"","confidence":"low"} for qa in qas]
+            kps = []
 
         if not kps:
+            # On failure, check cache — reuse old content rather than fabricating from raw answers
+            if topic in cache:
+                debug(f"  distillation failed for '{topic}', reusing cached content")
+                return (topic, cache[topic])
             return (topic, "")
         parts = [f"{topic}{marker}"]
         for i, kp in enumerate(kps, 1):
@@ -1136,26 +1168,31 @@ def _distill_points(db: QADatabase, client, debug: Callable) -> str:
                     parts.append(f"   Pitfall: {kp['pitfall']}")
                 if kp.get('scoring'):
                     parts.append(f"   Scoring: {kp['scoring']}")
-        return (topic, "\n".join(parts))
+        content = "\n".join(parts)
+        # Cache the successful result for future incremental runs
+        db.upsert_distillation_cache(topic, n_qa, qa_ids_hash, content)
+        return (topic, content)
 
     results = {}
-    with ThreadPoolExecutor(max_workers=min(len(topic_items), 16)) as executor:
-        futures = {executor.submit(_distill_one_topic, *item): item[0] for item in topic_items}
-        for future in as_completed(futures):
-            try:
-                topic, text = future.result()
-                if text:
-                    results[topic] = text
-            except Exception as e:
-                t = futures[future]
-                debug(f"  distillation thread failed for '{t}': {e}")
+    if topic_items:
+        with ThreadPoolExecutor(max_workers=min(len(topic_items), 16)) as executor:
+            futures = {executor.submit(_distill_one_topic, *item): item[0] for item in topic_items}
+            for future in as_completed(futures):
+                try:
+                    topic, text = future.result()
+                    if text:
+                        results[topic] = text
+                except Exception as e:
+                    t = futures[future]
+                    debug(f"  distillation thread failed for '{t}': {e}")
 
-    # Preserve original topic order
+    # Assemble output in original topic order: newly distilled + cached
     all_lines = []
-    for topic, _, _, _, _ in topic_items:
-        text = results.get(topic)
-        if text:
-            all_lines.append(text)
+    for topic in groups:
+        if topic in results:
+            all_lines.append(results[topic])
+        elif topic in cached_results:
+            all_lines.append(cached_results[topic])
 
     return "\n\n".join(all_lines) + "\n"
 

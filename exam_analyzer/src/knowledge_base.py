@@ -54,6 +54,7 @@ class QADatabase:
                 parent_question TEXT NOT NULL DEFAULT '',
                 success_count INTEGER DEFAULT 0,
                 total_attempts INTEGER DEFAULT 0,
+                last_failure_reason TEXT DEFAULT '',
                 created_at TEXT DEFAULT (datetime('now'))
             );
 
@@ -306,6 +307,14 @@ class QADatabase:
                 success_rate REAL,
                 last_triggered TEXT
             );
+
+            CREATE TABLE IF NOT EXISTS distillation_cache (
+                topic TEXT PRIMARY KEY,
+                qa_count INTEGER NOT NULL DEFAULT 0,
+                qa_ids_hash TEXT NOT NULL DEFAULT '',
+                distilled_content TEXT NOT NULL DEFAULT '',
+                distilled_at TEXT DEFAULT (datetime('now'))
+            );
         """)
         self.conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_qa_dedup ON qa_pairs(question_text, answer_text)"
@@ -328,6 +337,7 @@ class QADatabase:
             ("command_verb", "TEXT DEFAULT ''"),
             ("command_verb_secondary", "TEXT DEFAULT ''"),
             ("command_verb_inferred", "BOOLEAN DEFAULT 0"),
+            ("last_failure_reason", "TEXT DEFAULT ''"),
         ]:
             try:
                 self.conn.execute(f"ALTER TABLE qa_pairs ADD COLUMN {col} {col_def}")
@@ -391,20 +401,22 @@ class QADatabase:
         row = self.conn.execute("SELECT COUNT(*) as cnt FROM qa_pairs").fetchone()
         return row["cnt"] if row else 0
 
-    def record_attempt(self, qa_id: int, success: bool):
+    def record_attempt(self, qa_id: int, success: bool, reason: str = ""):
         with self._write_lock:
-            self._record_attempt_locked(qa_id, success)
+            self._record_attempt_locked(qa_id, success, reason)
 
-    def _record_attempt_locked(self, qa_id, success):
+    def _record_attempt_locked(self, qa_id, success, reason=""):
         if success:
             self.conn.execute(
-                "UPDATE qa_pairs SET success_count=success_count+1, total_attempts=total_attempts+1 WHERE id=?",
+                "UPDATE qa_pairs SET success_count=success_count+1, total_attempts=total_attempts+1, "
+                "last_failure_reason='' WHERE id=?",
                 (qa_id,),
             )
         else:
             self.conn.execute(
-                "UPDATE qa_pairs SET total_attempts=total_attempts+1 WHERE id=?",
-                (qa_id,),
+                "UPDATE qa_pairs SET total_attempts=total_attempts+1, "
+                "last_failure_reason=? WHERE id=?",
+                (reason, qa_id),
             )
         self.conn.commit()
 
@@ -464,50 +476,82 @@ class QADatabase:
         return missed
 
     def get_all_weights(self) -> dict[int, dict]:
+        """Compute Beta(1,1) posterior weights with Wilson score lower bound.
+
+        Posterior: Beta(s+1, t-s+1) where s=success_count, t=total_attempts.
+        Uses Wilson score interval for the lower bound — far more accurate than
+        the Normal (Wald) approximation for small t and extreme proportions.
+        """
         rows = self.conn.execute("SELECT id, success_count, total_attempts FROM qa_pairs").fetchall()
         result = {}
         for r in rows:
             s, t = r["success_count"], r["total_attempts"]
             mean = (s + 1) / (t + 2)
             if t > 0:
-                se = (mean * (1 - mean) / (t + 2)) ** 0.5
-                lb = max(0.0, mean - 1.645 * se)
+                # Wilson score lower bound (90% one-sided, z=1.645)
+                # Applied to Beta(s+1, t-s+1) posterior parameters
+                a, b = s + 1, t - s + 1
+                n_post = a + b  # = t + 2
+                p_hat = a / n_post
+                z = 1.645
+                z2 = z * z
+                denom = 1.0 + z2 / n_post
+                center = (p_hat + z2 / (2.0 * n_post)) / denom
+                margin = z * ((p_hat * (1.0 - p_hat) + z2 / (4.0 * n_post)) / n_post) ** 0.5 / denom
+                lb = max(0.0, center - margin)
             else:
                 lb = 0.0
             result[r["id"]] = {"mean": round(mean, 3), "lower_bound": round(lb, 3), "total": t}
         return result
+
+    # ============================================================
+    # Distillation cache — enables incremental distillation
+    # ============================================================
+
+    def get_distillation_cache(self) -> dict[str, str]:
+        """Return {topic: distilled_content} for all cached topics."""
+        rows = self.conn.execute(
+            "SELECT topic, distilled_content FROM distillation_cache"
+        ).fetchall()
+        return {r["topic"]: r["distilled_content"] for r in rows}
+
+    def get_cached_topic_state(self, topic: str) -> dict | None:
+        """Return {qa_count, qa_ids_hash} for a cached topic, or None."""
+        row = self.conn.execute(
+            "SELECT qa_count, qa_ids_hash FROM distillation_cache WHERE topic=?",
+            (topic,),
+        ).fetchone()
+        return {"qa_count": row["qa_count"], "qa_ids_hash": row["qa_ids_hash"]} if row else None
+
+    def upsert_distillation_cache(self, topic: str, qa_count: int,
+                                   qa_ids_hash: str, content: str):
+        """Store or update cached distillation for a topic."""
+        with self._write_lock:
+            self.conn.execute(
+                """INSERT OR REPLACE INTO distillation_cache
+                   (topic, qa_count, qa_ids_hash, distilled_content, distilled_at)
+                   VALUES (?, ?, ?, ?, datetime('now'))""",
+                (topic, qa_count, qa_ids_hash, content),
+            )
+            self.conn.commit()
+
+    def invalidate_distillation_cache(self, topic: str):
+        """Remove a topic from the distillation cache (force re-distill)."""
+        with self._write_lock:
+            self.conn.execute("DELETE FROM distillation_cache WHERE topic=?", (topic,))
+            self.conn.commit()
 
     def upsert_topic_link(self, src_topic: str, dst_topic: str, count: int = 1):
         """Persist a cross-topic QA reference for See also generation."""
         if not src_topic or not dst_topic or src_topic == dst_topic:
             return
         with self._write_lock:
-            # Handle pre-existing duplicates from topic merge race conditions
-            dup_check = self.conn.execute(
-                "SELECT COUNT(*) as cnt FROM topic_links WHERE src_topic=? AND dst_topic=?",
-                (src_topic, dst_topic),
-            ).fetchone()
-            if dup_check and dup_check["cnt"] > 1:
-                # Consolidate duplicates first, then upsert
-                total = self.conn.execute(
-                    "SELECT SUM(count) as s FROM topic_links WHERE src_topic=? AND dst_topic=?",
-                    (src_topic, dst_topic),
-                ).fetchone()["s"] or 0
-                self.conn.execute(
-                    "DELETE FROM topic_links WHERE src_topic=? AND dst_topic=?",
-                    (src_topic, dst_topic),
-                )
-                self.conn.execute(
-                    "INSERT INTO topic_links (src_topic, dst_topic, count) VALUES (?, ?, ?)",
-                    (src_topic, dst_topic, total + count),
-                )
-            else:
-                self.conn.execute(
-                    """INSERT INTO topic_links (src_topic, dst_topic, count)
-                       VALUES (?, ?, ?)
-                       ON CONFLICT(src_topic, dst_topic) DO UPDATE SET count = count + ?""",
-                    (src_topic, dst_topic, count, count),
-                )
+            self.conn.execute(
+                """INSERT INTO topic_links (src_topic, dst_topic, count)
+                   VALUES (?, ?, ?)
+                   ON CONFLICT(src_topic, dst_topic) DO UPDATE SET count = count + ?""",
+                (src_topic, dst_topic, count, count),
+            )
             self.conn.commit()
 
     def get_topic_links(self) -> dict:

@@ -298,9 +298,10 @@ def discover_kp_edges(db: QADatabase, clustering: dict, kp_ids: list[str],
 
     # Build KP centroid matrix for semantic edges
     kp_centroids = {}
-    for i, kp_id in enumerate(kp_ids):
-        if i < len(centroids_list) and centroids_list[i] is not None:
-            kp_centroids[kp_id] = centroids_list[i]
+    for kp_id in kp_ids:
+        cluster_idx = int(kp_id.split("_")[1])
+        if cluster_idx < len(centroids_list) and centroids_list[cluster_idx] is not None:
+            kp_centroids[kp_id] = centroids_list[cluster_idx]
 
     # Semantic edges: cosine between KP centroids
     edge_count = 0
@@ -327,9 +328,10 @@ def discover_kp_edges(db: QADatabase, clustering: dict, kp_ids: list[str],
     if topic_links:
         # Build QA index → KP mapping
         qa_to_kp = {}
-        for i, kp_id in enumerate(kp_ids):
-            if i < len(clusters):
-                for qa_idx in clusters[i]:
+        for kp_id in kp_ids:
+            cluster_idx = int(kp_id.split("_")[1])
+            if cluster_idx < len(clusters):
+                for qa_idx in clusters[cluster_idx]:
                     qa_to_kp[qa_list[qa_idx]["id"]] = kp_id
 
         for (src_topic, dst_topic), count in topic_links.items():
@@ -373,9 +375,10 @@ def discover_sequential_edges(db: QADatabase, clustering: dict, kp_ids: list[str
 
     # Build QA → KP mapping
     qa_to_kp = {}
-    for i, kp_id in enumerate(kp_ids):
-        if i < len(clusters):
-            for qa_idx in clusters[i]:
+    for kp_id in kp_ids:
+        cluster_idx = int(kp_id.split("_")[1])
+        if cluster_idx < len(clusters):
+            for qa_idx in clusters[cluster_idx]:
                 qa_to_kp[qa_list[qa_idx]["id"]] = kp_id
 
     # Natural sort key for question numbers: "1(a)" → (1, "a"), "10(a)" → (10, "a")

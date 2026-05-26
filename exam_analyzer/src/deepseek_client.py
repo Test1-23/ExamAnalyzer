@@ -28,13 +28,13 @@ def _create_debug_logger(debug_callback):
 
 def _extract_json(text: str) -> dict:
     """Extract JSON from response text — handles both JSON mode and embedded JSON."""
-    # Try direct parse first
     text = text.strip()
+    # Try direct parse first
     try:
         return json.loads(text)
     except json.JSONDecodeError:
         pass
-    # Regex fallback: balanced-brace matching for 1-level nested JSON first
+    # Regex fallback: balanced-brace matching for 1-level nested JSON
     for pattern in (r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}", r"\[[^\[\]]*(?:\[[^\[\]]*\][^\[\]]*)*\]"):
         m = re.search(pattern, text, re.DOTALL)
         if m:
@@ -42,14 +42,23 @@ def _extract_json(text: str) -> dict:
                 return json.loads(m.group())
             except json.JSONDecodeError:
                 continue
-    # Greedy fallback (existing behavior)
-    for pattern in (r"\{.*\}", r"\[.*\]"):
-        m = re.search(pattern, text, re.DOTALL)
-        if m:
-            try:
-                return json.loads(m.group())
-            except json.JSONDecodeError:
-                continue
+    # Bracket-aware extraction: find the FIRST balanced { } or [ ] pair
+    for open_c, close_c in [("{", "}"), ("[", "]")]:
+        start = text.find(open_c)
+        if start == -1:
+            continue
+        depth = 0
+        for i in range(start, len(text)):
+            if text[i] == open_c:
+                depth += 1
+            elif text[i] == close_c:
+                depth -= 1
+                if depth == 0:
+                    try:
+                        return json.loads(text[start:i + 1])
+                    except json.JSONDecodeError:
+                        break
+                    break
     raise ValueError(f"Could not extract JSON from response: {text[:200]}")
 
 

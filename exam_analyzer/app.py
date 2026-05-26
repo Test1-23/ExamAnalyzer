@@ -804,7 +804,10 @@ def start_evaluation():
     with _eval_lock:
         if _eval_state["running"]:
             return jsonify({"error": "评估正在进行中"}), 400
-        if analysis_state.get("running"):
+        # Check analysis state under its own lock to avoid race
+        with _state_lock:
+            analysis_running = analysis_state.get("running", False)
+        if analysis_running:
             return jsonify({"error": "分析正在进行中，请等待完成"}), 400
         # Double-check retriever still exists
         retriever = _get_chat_retriever()

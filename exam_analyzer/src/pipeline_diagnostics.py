@@ -22,16 +22,16 @@ _log = get_logger()
 # ═══════════════════════════════════════════════════════════════
 
 def detect_confusion(db: QADatabase, student_id: str, current_question: str,
-                     kp_id: str, debug_cb=None) -> bool:
-    """Detect if student's question indicates confusion about a KP."""
+                     topic: str, debug_cb=None) -> bool:
+    """Detect if student's question indicates confusion about a topic."""
     row = db.conn.execute(
         """SELECT COUNT(*) as cnt FROM confusion_events
            WHERE student_id = ? AND topic = ? AND created_at > datetime('now', '-1 hour')""",
-        (student_id, kp_id),
+        (student_id, topic),
     ).fetchone()
     if row and row["cnt"] >= 2:
         if debug_cb:
-            debug_cb(f"  Confusion threshold reached for KP {kp_id} (student {student_id})")
+            debug_cb(f"  Confusion threshold reached for topic '{topic}' (student {student_id})")
         return True
     confusion_keywords = ["confused", "don't understand", "why", "how come",
                           "不理解", "不懂", "为什么", "怎么回事", "不对吧"]
@@ -295,12 +295,13 @@ def compute_paper_signature(db: QADatabase, display_name: str = None) -> dict:
 def update_baselines(db: QADatabase):
     """Update dimension baselines (median + MAD) from all paper_signatures."""
     dimensions = ["qa_count", "topic_count", "avg_miss_rate", "avg_answer_length"]
-    values = None
+    sample_counts = []
     for dim in dimensions:
         rows = db.conn.execute(
             f"SELECT {dim} FROM paper_signatures WHERE {dim} IS NOT NULL"
         ).fetchall()
         values = [r[dim] for r in rows if r[dim] is not None]
+        sample_counts.append(len(values))
         if len(values) < 3:
             continue
         med = statistics.median(values)
@@ -312,7 +313,8 @@ def update_baselines(db: QADatabase):
             (dim, sum(values) / len(values), med, mad, len(values)),
         )
     db.conn.commit()
-    _log.info(f"Baselines updated: {len(dimensions)} dimensions, {len(values) if values else 0} samples")
+    _log.info(f"Baselines updated: {len(dimensions)} dimensions, "
+              f"sample counts: {dict(zip(dimensions, sample_counts))}")
 
 
 def detect_anomalies(db: QADatabase, display_name: str) -> list[str]:
