@@ -1,0 +1,39 @@
+# Claude Code
+.claude/
+
+# User-specific MCP configuration
+.mcp.json
+
+# Python virtual environment
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Python cache (all subdirectories)
+__pycache__/
+*.pyc
+
+# --- exam_analyzer ---
+exam_analyzer/config.json
+exam_analyzer/logs/
+exam_analyzer/intermediate/
+exam_analyzer/point/
+exam_analyzer/TestReport/
+exam_analyzer/input/
+exam_analyzer/input/keepout/
+exam_analyzer/feedback/
+exam_analyzer/CLAUDE.md
+exam_analyzer/tests/
+
+# Generated analysis reports
+exam_analyzer/分析报告*.md
+
+# Root-level generated files
+intermediate/
+logs/
