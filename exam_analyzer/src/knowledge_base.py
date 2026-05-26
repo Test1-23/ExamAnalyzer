@@ -315,6 +315,17 @@ class QADatabase:
                 distilled_content TEXT NOT NULL DEFAULT '',
                 distilled_at TEXT DEFAULT (datetime('now'))
             );
+
+            CREATE TABLE IF NOT EXISTS evolution_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                kp_id TEXT REFERENCES knowledge_points(id),
+                trigger_type TEXT NOT NULL,
+                trigger_detail TEXT,
+                old_state TEXT,
+                new_state TEXT,
+                outcome TEXT DEFAULT 'pending',
+                created_at TEXT DEFAULT (datetime('now'))
+            );
         """)
         self.conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_qa_dedup ON qa_pairs(question_text, answer_text)"
@@ -540,6 +551,37 @@ class QADatabase:
         with self._write_lock:
             self.conn.execute("DELETE FROM distillation_cache WHERE topic=?", (topic,))
             self.conn.commit()
+
+    # ============================================================
+    # Evolution history — tracks KP self-improvement events
+    # ============================================================
+
+    def record_evolution(self, kp_id: str, trigger_type: str,
+                         trigger_detail: str = "", old_state: str = "",
+                         new_state: str = "", outcome: str = "pending"):
+        """Record an evolution event for a KP."""
+        with self._write_lock:
+            self.conn.execute(
+                """INSERT INTO evolution_history
+                   (kp_id, trigger_type, trigger_detail, old_state, new_state, outcome)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (kp_id, trigger_type, trigger_detail, old_state, new_state, outcome),
+            )
+            self.conn.commit()
+
+    def get_pending_evolutions(self, kp_id: str = None) -> list[dict]:
+        """Get pending evolution events, optionally filtered by KP."""
+        if kp_id:
+            rows = self.conn.execute(
+                "SELECT * FROM evolution_history WHERE kp_id=? AND outcome='pending' "
+                "ORDER BY created_at", (kp_id,)
+            ).fetchall()
+        else:
+            rows = self.conn.execute(
+                "SELECT * FROM evolution_history WHERE outcome='pending' "
+                "ORDER BY created_at"
+            ).fetchall()
+        return [dict(r) for r in rows]
 
     def upsert_topic_link(self, src_topic: str, dst_topic: str, count: int = 1):
         """Persist a cross-topic QA reference for See also generation."""

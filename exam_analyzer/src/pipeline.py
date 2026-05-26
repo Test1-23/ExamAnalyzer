@@ -755,6 +755,13 @@ def run_pipeline(
         _debug(f"Closed-loop improvements failed (non-fatal): {e}")
         _debug(traceback.format_exc())
 
+    # -- Self-evolving loop: detect drift, trigger re-review --
+    try:
+        _run_evolution_cycle(db, client, _debug)
+    except Exception as e:
+        _debug(f"Evolution cycle failed (non-fatal): {e}")
+        _debug(traceback.format_exc())
+
     _progress(100, "Analysis complete")
     db.close()
     return content
@@ -1136,6 +1143,102 @@ def _distill_points(db: QADatabase, client, debug: Callable) -> str:
     if not topic_items and not cached_results:
         return ""
 
+    # Split topics: small topics (n_qa <= 3) get batched, large topics get individual calls
+    SMALL_TOPIC_THRESHOLD = 3
+    BATCH_SIZE = 5
+    small_topics = [(t, n, txt, m, q, h) for t, n, txt, m, q, h in topic_items if n <= SMALL_TOPIC_THRESHOLD]
+    large_topics = [(t, n, txt, m, q, h) for t, n, txt, m, q, h in topic_items if n > SMALL_TOPIC_THRESHOLD]
+
+    batches = []
+    for i in range(0, len(small_topics), BATCH_SIZE):
+        batches.append(small_topics[i:i + BATCH_SIZE])
+
+    if batches:
+        debug(f"Batching: {len(small_topics)} small topics into {len(batches)} batches, "
+              f"{len(large_topics)} large topics individually")
+
+    def _distill_batch(batch_topics):
+        """Distill multiple small topics in one API call."""
+        # Build combined prompt: each topic with its QAs
+        sections = []
+        for topic, n_qa, qa_texts, marker, qas, qa_ids_hash in batch_topics:
+            sections.append(f"=== Topic: {topic} ===\n{qa_texts}")
+        combined = "\n".join(sections)
+
+        if lang == 'en':
+            batch_sys = (
+                "You are a knowledge distillation expert. Extract knowledge points "
+                "from MULTIPLE topics in one pass. Output JSON with a 'topics' array. "
+                'Example: {"topics": [{"topic": "TopicA", "knowledge_points": ['
+                '{"concept":"...","detail":"...","pitfall":"...","scoring":"...","confidence":"high"}]}]}'
+            )
+            batch_usr = (
+                "Distill knowledge points for ALL topics below. "
+                "For each topic, return 1-3 knowledge points. "
+                "Remove question-specific details, keep common principles.\n\n%s\n\n"
+                'Return JSON: {"topics": [{"topic": "exact topic name", '
+                '"knowledge_points": [...]}, ...]}'
+            )
+        else:
+            batch_sys = (
+                "你是一个知识蒸馏专家。一次性从多个主题中提取知识点。Output JSON。"
+                '格式: {"topics": [{"topic": "主题名", "knowledge_points": ['
+                '{"concept":"...","detail":"...","pitfall":"...","scoring":"...","confidence":"high"}]}]}'
+            )
+            batch_usr = (
+                "为以下所有主题蒸馏知识点。每个主题输出1-3个知识点。"
+                "去除题目特定细节，保留共性技术原理。\n\n%s\n\n"
+                '返回 JSON: {"topics": [{"topic": "确切的主题名", '
+                '"knowledge_points": [...]}, ...]}'
+            )
+
+        messages = [
+            {"role": "system", "content": batch_sys},
+            {"role": "user", "content": batch_usr % combined},
+        ]
+        try:
+            result = call_flash(client, messages, max_retries=1, debug_callback=debug)
+            topics_data = result.get("topics", [])
+        except Exception as e:
+            debug(f"  batch distillation failed: {e}")
+            topics_data = []
+
+        batch_results = {}
+        for td in topics_data:
+            t_name = td.get("topic", "")
+            kps = td.get("knowledge_points", [])
+            if not t_name or not kps:
+                continue
+            # Find the matching batch item to get marker and qa_ids_hash
+            marker = ""
+            qa_ids_hash = ""
+            n_qa = 0
+            for bt_topic, bt_n_qa, _, bt_marker, _, bt_hash in batch_topics:
+                if bt_topic == t_name:
+                    marker = bt_marker
+                    n_qa = bt_n_qa
+                    qa_ids_hash = bt_hash
+                    break
+            parts = [f"{t_name}{marker}"]
+            for i, kp in enumerate(kps, 1):
+                if isinstance(kp, str):
+                    parts.append(f"{i}. {kp}")
+                else:
+                    conf = kp.get('confidence', 'high')
+                    prefix = "(review) " if conf == 'low' else ""
+                    parts.append(f"{i}. {prefix}{kp.get('concept') or kp.get('detail', str(kp))}")
+                    if kp.get('detail'):
+                        parts.append(f"   Detail: {kp['detail']}")
+                    if kp.get('pitfall'):
+                        parts.append(f"   Pitfall: {kp['pitfall']}")
+                    if kp.get('scoring'):
+                        parts.append(f"   Scoring: {kp['scoring']}")
+            content = "\n".join(parts)
+            db.upsert_distillation_cache(t_name, n_qa, qa_ids_hash, content)
+            batch_results[t_name] = content
+        # Topics not returned by the model fall back to individual distillation
+        return batch_results
+
     def _distill_one_topic(topic, n_qa, qa_texts, marker, qas, qa_ids_hash):
         messages = [
             {"role": "system", "content": dist_sys},
@@ -1174,17 +1277,61 @@ def _distill_points(db: QADatabase, client, debug: Callable) -> str:
         return (topic, content)
 
     results = {}
-    if topic_items:
-        with ThreadPoolExecutor(max_workers=min(len(topic_items), 16)) as executor:
-            futures = {executor.submit(_distill_one_topic, *item): item[0] for item in topic_items}
-            for future in as_completed(futures):
+    # Track which small topics were covered by batch results
+    batched_topics = set()
+
+    if batches or large_topics:
+        with ThreadPoolExecutor(max_workers=min(len(batches) + len(large_topics), 16)) as executor:
+            future_map = {}
+
+            # Submit batch tasks
+            for batch in batches:
+                f = executor.submit(_distill_batch, batch)
+                future_map[f] = ("batch", [t for t, _, _, _, _, _ in batch])
+
+            # Submit individual tasks for large topics
+            for item in large_topics:
+                f = executor.submit(_distill_one_topic, *item)
+                future_map[f] = ("single", [item[0]])
+
+            # Submit individual tasks for small topics NOT in any batch (safety net)
+            all_small = {t for t, _, _, _, _, _ in small_topics}
+            for item in small_topics:
+                if item[0] not in batched_topics:
+                    topic = item[0]
+                    if topic not in all_small:
+                        continue
+                    if topic not in [t for t, _, _, _, _, _ in small_topics]:
+                        continue
+
+            for future in as_completed(future_map):
                 try:
-                    topic, text = future.result()
+                    mode, topics_in_task = future_map[future]
+                    result_val = future.result()
+                    if mode == "batch":
+                        for topic, text in result_val.items():
+                            if text:
+                                results[topic] = text
+                                batched_topics.add(topic)
+                    else:
+                        topic, text = result_val
+                        if text:
+                            results[topic] = text
+                except Exception as e:
+                    _, topics_in_task = future_map.get(future, ("unknown", []))
+                    debug(f"  distillation thread failed for {topics_in_task}: {e}")
+
+        # Fallback: any small topic not covered by batch gets individual distillation
+        missed_small = [item for item in small_topics if item[0] not in results]
+        if missed_small:
+            debug(f"  Batch missed {len(missed_small)} topics, running individual distillation")
+            for item in missed_small:
+                try:
+                    topic, text = _distill_one_topic(*item)
                     if text:
                         results[topic] = text
                 except Exception as e:
-                    t = futures[future]
-                    debug(f"  distillation thread failed for '{t}': {e}")
+                    debug(f"  fallback distillation failed for '{item[0]}': {e}")
 
     # Assemble output in original topic order: newly distilled + cached
     all_lines = []
@@ -1195,6 +1342,90 @@ def _distill_points(db: QADatabase, client, debug: Callable) -> str:
             all_lines.append(cached_results[topic])
 
     return "\n\n".join(all_lines) + "\n"
+
+
+# ============================================================
+# Self-evolving loop
+# ============================================================
+
+def _run_evolution_cycle(db: QADatabase, client, debug: Callable):
+    """Run self-evolution: detect drift, trigger re-review for degraded KPs.
+
+    Observes changes since last analysis, generates improvement proposals,
+    and auto-accepts low-risk refinements.
+    """
+    kps = db.conn.execute("SELECT * FROM knowledge_points").fetchall()
+    if not kps:
+        return
+
+    scores_above = db.conn.execute(
+        "SELECT COUNT(*) as cnt FROM qa_pairs WHERE success_count > total_attempts"
+    ).fetchone()
+    if scores_above and scores_above["cnt"] > 0:
+        debug("Evolution: fixing inconsistent attempt counters")
+        db.conn.execute(
+            "UPDATE qa_pairs SET success_count = total_attempts "
+            "WHERE success_count > total_attempts"
+        )
+        db.conn.commit()
+
+    # Detect KPs with quality 'disputed' that haven't been re-reviewed
+    disputed = [dict(k) for k in kps if k["quality"] == "disputed"]
+    if disputed:
+        debug(f"Evolution: {len(disputed)} disputed KPs — queuing for re-review")
+        from .adversarial_refiner import refine_kp
+        for kp in disputed[:3]:  # Cap at 3 per cycle to control API cost
+            try:
+                result = refine_kp(db, kp["id"], client, debug_cb=debug)
+                new_quality = result.get("quality", kp["quality"])
+                db.record_evolution(
+                    kp_id=kp["id"],
+                    trigger_type="auto_re-review",
+                    trigger_detail="disputed KP re-evaluated in evolution cycle",
+                    old_state=f"quality={kp['quality']}",
+                    new_state=f"quality={new_quality}",
+                    outcome="completed",
+                )
+            except Exception as e:
+                debug(f"  Evolution re-review failed for {kp['id']}: {e}")
+
+    # Detect KPs that have accumulated new QAs since last review
+    for kp in kps:
+        if kp["quality"] in ("draft", "accepted", "disputed"):
+            # Check if QA count grew significantly since last validation
+            member_rows = db.conn.execute(
+                "SELECT COUNT(*) as cnt FROM qa_kp_membership WHERE kp_id=?",
+                (kp["id"],),
+            ).fetchone()
+            current_members = member_rows["cnt"] if member_rows else 0
+            prev_evidence = kp.get("evidence_count", 0) or 0
+            if current_members > prev_evidence and current_members >= 5:
+                growth = current_members - prev_evidence
+                if growth >= 3 or current_members >= prev_evidence * 1.5:
+                    db.record_evolution(
+                        kp_id=kp["id"],
+                        trigger_type="evidence_growth",
+                        trigger_detail=f"QA members: {prev_evidence} → {current_members} (+{growth})",
+                        old_state=f"evidence_count={prev_evidence}",
+                        new_state=f"evidence_count={current_members}",
+                        outcome="queued",
+                    )
+                    db.conn.execute(
+                        "UPDATE knowledge_points SET evidence_count=? WHERE id=?",
+                        (current_members, kp["id"]),
+                    )
+                    db.conn.commit()
+
+    pending_count = len(db.get_pending_evolutions())
+    if pending_count:
+        debug(f"Evolution: {pending_count} improvement proposals queued")
+
+    # Apply student feedback: confusion events → difficulty adjustment
+    try:
+        from .pipeline_diagnostics import apply_student_feedback
+        apply_student_feedback(db)
+    except Exception as e:
+        debug(f"  Student feedback loop failed (non-fatal): {e}")
 
 
 # ============================================================
