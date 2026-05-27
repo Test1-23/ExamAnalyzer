@@ -326,6 +326,47 @@ class QADatabase:
                 outcome TEXT DEFAULT 'pending',
                 created_at TEXT DEFAULT (datetime('now'))
             );
+
+            -- Phase 1: MS Fragment extraction + behavior data
+            CREATE TABLE IF NOT EXISTS ms_fragments (
+                point_id TEXT PRIMARY KEY,
+                qa_id INTEGER REFERENCES qa_pairs(id),
+                point_text TEXT NOT NULL,
+                marks INTEGER DEFAULT 1,
+                created_at TEXT DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS fragment_help_map (
+                fragment_id TEXT REFERENCES ms_fragments(point_id),
+                helped_qa_id INTEGER REFERENCES qa_pairs(id),
+                help_effect REAL DEFAULT 0,
+                PRIMARY KEY (fragment_id, helped_qa_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS fragment_membership (
+                fragment_id TEXT PRIMARY KEY REFERENCES ms_fragments(point_id),
+                topic_id TEXT NOT NULL,
+                loyalty REAL DEFAULT 0.5,
+                joined_at TEXT DEFAULT (datetime('now')),
+                previous_topic_id TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS dynamic_topics (
+                topic_id TEXT PRIMARY KEY,
+                name TEXT DEFAULT '',
+                mass INTEGER DEFAULT 0,
+                cohesion REAL DEFAULT 0,
+                stability REAL DEFAULT 0,
+                behavioral_profile TEXT DEFAULT '{}',
+                quality TEXT DEFAULT 'embryonic',
+                parent_topic TEXT,
+                child_topics TEXT DEFAULT '[]',
+                merged_from TEXT DEFAULT '[]',
+                kp_concept TEXT DEFAULT '',
+                kp_detail TEXT DEFAULT '',
+                created_at TEXT DEFAULT (datetime('now')),
+                last_evolved_at TEXT
+            );
         """)
         self.conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_qa_dedup ON qa_pairs(question_text, answer_text)"
@@ -601,6 +642,144 @@ class QADatabase:
                 "ORDER BY created_at"
             ).fetchall()
         return [dict(r) for r in rows]
+
+    # ============================================================
+    # Phase 1: MS Fragments + Dynamic Topics
+    # ============================================================
+
+    def insert_fragment(self, point_id: str, qa_id: int, point_text: str,
+                        marks: int = 1) -> str:
+        """Insert a single MS scoring point fragment. Returns point_id."""
+        with self._write_lock:
+            self.conn.execute(
+                """INSERT OR IGNORE INTO ms_fragments (point_id, qa_id, point_text, marks)
+                   VALUES (?, ?, ?, ?)""",
+                (point_id, qa_id, point_text, marks),
+            )
+            self.conn.commit()
+        return point_id
+
+    def insert_fragments_batch(self, fragments: list[dict]) -> int:
+        """Insert multiple fragments for one QA. Each: {point_id, point_text, marks}.
+        Returns count inserted."""
+        with self._write_lock:
+            count = 0
+            for f in fragments:
+                self.conn.execute(
+                    """INSERT OR IGNORE INTO ms_fragments (point_id, qa_id, point_text, marks)
+                       VALUES (?, ?, ?, ?)""",
+                    (f["point_id"], f["qa_id"], f["point_text"], f.get("marks", 1)),
+                )
+                count += 1
+            self.conn.commit()
+        return count
+
+    def set_fragment_membership(self, fragment_id: str, topic_id: str,
+                                 loyalty: float = 0.5):
+        """Assign a fragment to a topic with initial loyalty."""
+        with self._write_lock:
+            self.conn.execute(
+                """INSERT OR REPLACE INTO fragment_membership
+                   (fragment_id, topic_id, loyalty, joined_at, previous_topic_id)
+                   VALUES (?, ?, ?, datetime('now'),
+                    (SELECT topic_id FROM fragment_membership WHERE fragment_id=?))""",
+                (fragment_id, topic_id, loyalty, fragment_id),
+            )
+            self.conn.commit()
+
+    def record_fragment_help(self, fragment_id: str, helped_qa_id: int,
+                              help_effect: float = 0.0):
+        """Record that a fragment helped answer a question."""
+        with self._write_lock:
+            self.conn.execute(
+                """INSERT OR REPLACE INTO fragment_help_map
+                   (fragment_id, helped_qa_id, help_effect)
+                   VALUES (?, ?, ?)""",
+                (fragment_id, helped_qa_id, help_effect),
+            )
+            self.conn.commit()
+
+    def record_fragment_help_batch(self, fragment_ids: list[str],
+                                    helped_qa_id: int, help_effect: float = 0.0):
+        """Record that multiple fragments helped answer a question."""
+        with self._write_lock:
+            for fid in fragment_ids:
+                self.conn.execute(
+                    """INSERT OR REPLACE INTO fragment_help_map
+                       (fragment_id, helped_qa_id, help_effect)
+                       VALUES (?, ?, ?)""",
+                    (fid, helped_qa_id, help_effect),
+                )
+            self.conn.commit()
+
+    def upsert_dynamic_topic(self, topic_id: str, name: str = "",
+                               quality: str = "embryonic"):
+        """Create or update a dynamic topic."""
+        with self._write_lock:
+            self.conn.execute(
+                """INSERT OR REPLACE INTO dynamic_topics
+                   (topic_id, name, quality, last_evolved_at)
+                   VALUES (?, ?, ?, datetime('now'))""",
+                (topic_id, name, quality),
+            )
+            self.conn.commit()
+
+    def update_topic_stats(self, topic_id: str, mass: int, cohesion: float,
+                            stability: float):
+        """Update mass, cohesion, stability for a topic."""
+        with self._write_lock:
+            self.conn.execute(
+                """UPDATE dynamic_topics SET mass=?, cohesion=?, stability=?,
+                   last_evolved_at=datetime('now') WHERE topic_id=?""",
+                (mass, cohesion, stability, topic_id),
+            )
+            self.conn.commit()
+
+    def set_topic_kp(self, topic_id: str, kp_concept: str, kp_detail: str):
+        """Set the KP text for a stable topic."""
+        with self._write_lock:
+            self.conn.execute(
+                """UPDATE dynamic_topics SET kp_concept=?, kp_detail=?,
+                   quality='stable', last_evolved_at=datetime('now')
+                   WHERE topic_id=?""",
+                (kp_concept, kp_detail, topic_id),
+            )
+            self.conn.commit()
+
+    def get_stable_topics(self) -> list[dict]:
+        """Return all topics with quality='stable' and their KP text."""
+        rows = self.conn.execute(
+            "SELECT topic_id, name, kp_concept, kp_detail, mass, cohesion, stability "
+            "FROM dynamic_topics WHERE quality='stable'"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_topic_fragments(self, topic_id: str) -> list[str]:
+        """Return fragment IDs belonging to a topic."""
+        rows = self.conn.execute(
+            "SELECT fragment_id FROM fragment_membership WHERE topic_id=?",
+            (topic_id,),
+        ).fetchall()
+        return [r["fragment_id"] for r in rows]
+
+    def get_fragment_help_count(self, fragment_id: str) -> int:
+        """Return how many questions a fragment has helped."""
+        row = self.conn.execute(
+            "SELECT COUNT(*) as cnt FROM fragment_help_map WHERE fragment_id=?",
+            (fragment_id,),
+        ).fetchone()
+        return row["cnt"] if row else 0
+
+    def get_topic_helped_questions(self, topic_id: str) -> set:
+        """Return the set of QA IDs that this topic's fragments helped."""
+        rows = self.conn.execute(
+            """SELECT DISTINCT fhm.helped_qa_id
+               FROM fragment_help_map fhm
+               JOIN fragment_membership fm ON fhm.fragment_id = fm.fragment_id
+               WHERE fm.topic_id = ?""",
+            (topic_id,),
+        ).fetchall()
+        return {r["helped_qa_id"] for r in rows}
 
     def upsert_topic_link(self, src_topic: str, dst_topic: str, count: int = 1):
         """Persist a cross-topic QA reference for See also generation."""

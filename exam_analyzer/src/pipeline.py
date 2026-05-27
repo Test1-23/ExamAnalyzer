@@ -181,6 +181,46 @@ def _generate_summary(question_text: str, answer_text: str,
         return question_text[:200], "(unnamed)"
 
 
+def _extract_ms_fragments(answer_text: str, qa_id: int, client, debug: Callable) -> list[dict]:
+    """Split a mark scheme answer into individual scoring points. Preserves original wording."""
+    lang = detect_content_lang(answer_text)
+
+    if lang == 'en':
+        sys = ("You are an exam marking expert. Split the given mark scheme answer "
+               "into individual scoring points. Output JSON.")
+        usr = (f"Mark scheme answer:\n{answer_text}\n\n"
+               "Split into independent scoring points. Each point is a single, "
+               "non-divisible requirement that a student must demonstrate.\n"
+               "Preserve the original wording exactly. Do not rewrite or paraphrase.\n"
+               'Return JSON: {"points": [{"text": "exact original wording", "marks": 1}, ...]}')
+    else:
+        sys = ("你是一个考试评分专家。将给定的评分标准答案拆分为独立的得分点。Output JSON。")
+        usr = (f"评分标准答案:\n{answer_text}\n\n"
+               "拆分为独立的得分点。每个得分点是一个不可再分的要求。\n"
+               "保留原文措辞，不要改写。\n"
+               '返回 JSON: {"points": [{"text": "原始措辞", "marks": 1}, ...]}')
+
+    messages = [{"role": "system", "content": sys}, {"role": "user", "content": usr}]
+    try:
+        result = call_flash(client, messages, max_retries=1, debug_callback=debug)
+        points = result.get("points", []) if isinstance(result, dict) else []
+    except Exception as e:
+        debug(f"  fragment extraction failed for QA {qa_id}: {e}")
+        points = []
+
+    fragments = []
+    for i, p in enumerate(points):
+        text = p.get("text", "") if isinstance(p, dict) else str(p)
+        if text.strip():
+            fragments.append({
+                "point_id": f"f_{qa_id}_{i}",
+                "qa_id": qa_id,
+                "point_text": text.strip(),
+                "marks": p.get("marks", 1) if isinstance(p, dict) else 1,
+            })
+    return fragments
+
+
 # -- Round 1: Answer with past QAs (Pro) --
 
 def _build_answer_prompt(question_text: str, similar_qas: list[dict]) -> list:
@@ -447,6 +487,22 @@ def run_pipeline(
                                   paper=display_name, question_number=qa.question_number,
                                   parent_question=qa.parent_question)
                 db.record_attempt(qa_id, success=True)
+
+                # Phase 1: Extract MS fragments + assign to initial topic
+                try:
+                    fragments = _extract_ms_fragments(
+                        qa.answer_text, qa_id, client, _debug)
+                    if fragments:
+                        db.insert_fragments_batch(fragments)
+                        topic_id = f"topic_{topic.replace(' ', '_').replace('/', '_')}"
+                        db.upsert_dynamic_topic(
+                            topic_id, name=topic, quality="embryonic")
+                        for frag in fragments:
+                            db.set_fragment_membership(
+                                frag["point_id"], topic_id, loyalty=0.5)
+                except Exception as e:
+                    _debug(f"  fragment extraction failed for Q{qa.question_number}: {e}")
+
                 tracker.step("")
                 return qa_id
 
@@ -595,6 +651,35 @@ def run_pipeline(
                                          covered_count=len(covered), missed_count=len(missed_texts),
                                          missed_text="\n".join(missed_texts) if missed_texts else "",
                                          miss_categories=miss_cats_json)
+
+                # Phase 1: Extract MS fragments + record behavior help + assign topic
+                try:
+                    fragments = _extract_ms_fragments(
+                        qa.answer_text, qa_id, client, _debug)
+                    if fragments:
+                        db.insert_fragments_batch(fragments)
+                        topic_id = f"topic_{topic.replace(' ', '_').replace('/', '_')}"
+                        db.upsert_dynamic_topic(
+                            topic_id, name=topic, quality="embryonic")
+                        for frag in fragments:
+                            db.set_fragment_membership(
+                                frag["point_id"], topic_id, loyalty=0.5)
+
+                    # Record behavior: fragments from used QAs helped this question
+                    if used_ids:
+                        for used_qa_id in used_ids:
+                            used_frags = db.conn.execute(
+                                "SELECT point_id FROM ms_fragments WHERE qa_id=?",
+                                (used_qa_id,)
+                            ).fetchall()
+                            frag_ids = [r["point_id"] for r in used_frags]
+                            if frag_ids:
+                                help_effect = (len(covered) / max(
+                                    len(covered) + len(missed_texts), 1))
+                                db.record_fragment_help_batch(
+                                    frag_ids, qa_id, round(help_effect, 3))
+                except Exception as e:
+                    _debug(f"  fragment extraction failed for Q{qn}: {e}")
 
                 _debug(f"  Q{qn}: retrieved={len(all_similar)}, shown={len(top_similar)}, "
                        f"used={len(used_indices)}, topic={topic}, "
