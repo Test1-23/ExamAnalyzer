@@ -6,6 +6,7 @@ KPs are linked by prerequisite/corequisite/related edges discovered from
 Phase 2 retrieval behavior, embedding similarity, exam ordering, and student paths.
 """
 
+import os
 from collections import deque
 import numpy as np
 
@@ -262,7 +263,7 @@ def generate_kps(db: QADatabase, clustering: dict, client, debug_cb=None) -> lis
         return batch_results
 
     from concurrent.futures import ThreadPoolExecutor, as_completed
-    max_w = min(len(batches), 8)
+    max_w = min(len(batches), int(os.environ.get("PIPELINE_MAX_WORKERS", "8")))
     with ThreadPoolExecutor(max_workers=max_w) as executor:
         futures = {executor.submit(_name_batch, s, c): s for s, c in batches}
         for future in as_completed(futures):

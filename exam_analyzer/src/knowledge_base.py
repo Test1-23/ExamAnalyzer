@@ -339,29 +339,48 @@ class QADatabase:
         self.conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_dep_dep ON topic_dependencies(dependent)"
         )
-        # qa_pairs metadata columns (added 2026-05)
-        for col, col_def in [
-            ("session_id", "INTEGER REFERENCES exam_sessions(id)"),
-            ("is_representative", "BOOLEAN DEFAULT 0"),
-            ("is_cross_topic", "BOOLEAN DEFAULT 0"),
-            ("difficulty_estimate", "TEXT DEFAULT ''"),
-            ("command_verb", "TEXT DEFAULT ''"),
-            ("command_verb_secondary", "TEXT DEFAULT ''"),
-            ("command_verb_inferred", "BOOLEAN DEFAULT 0"),
-            ("last_failure_reason", "TEXT DEFAULT ''"),
-        ]:
-            try:
-                self.conn.execute(f"ALTER TABLE qa_pairs ADD COLUMN {col} {col_def}")
-            except sqlite3.OperationalError:
-                pass
-        # question_feedback metadata columns (added 2026-05)
-        for col, col_def in [
-            ("miss_categories", "TEXT DEFAULT ''"),
-        ]:
-            try:
-                self.conn.execute(f"ALTER TABLE question_feedback ADD COLUMN {col} {col_def}")
-            except sqlite3.OperationalError:
-                pass
+        self.conn.commit()
+        self._run_migrations()
+
+    def _run_migrations(self):
+        """Apply pending schema migrations in version order."""
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY, "
+            "description TEXT, applied_at TEXT DEFAULT (datetime('now')))"
+        )
+        current = self.conn.execute(
+            "SELECT COALESCE(MAX(version), 0) as v FROM schema_version"
+        ).fetchone()["v"]
+
+        migrations = [
+            (1, "qa_pairs metadata columns", [
+                "ALTER TABLE qa_pairs ADD COLUMN session_id INTEGER REFERENCES exam_sessions(id)",
+                "ALTER TABLE qa_pairs ADD COLUMN is_representative BOOLEAN DEFAULT 0",
+                "ALTER TABLE qa_pairs ADD COLUMN is_cross_topic BOOLEAN DEFAULT 0",
+                "ALTER TABLE qa_pairs ADD COLUMN difficulty_estimate TEXT DEFAULT ''",
+                "ALTER TABLE qa_pairs ADD COLUMN command_verb TEXT DEFAULT ''",
+                "ALTER TABLE qa_pairs ADD COLUMN command_verb_secondary TEXT DEFAULT ''",
+                "ALTER TABLE qa_pairs ADD COLUMN command_verb_inferred BOOLEAN DEFAULT 0",
+                "ALTER TABLE qa_pairs ADD COLUMN last_failure_reason TEXT DEFAULT ''",
+            ]),
+            (2, "question_feedback metadata", [
+                "ALTER TABLE question_feedback ADD COLUMN miss_categories TEXT DEFAULT ''",
+            ]),
+        ]
+
+        for version, description, statements in migrations:
+            if version <= current:
+                continue
+            for stmt in statements:
+                try:
+                    self.conn.execute(stmt)
+                except sqlite3.OperationalError:
+                    pass  # column already exists from a previous partial run
+            self.conn.execute(
+                "INSERT INTO schema_version (version, description) VALUES (?, ?)",
+                (version, description),
+            )
+            _log.info(f"DB migration v{version}: {description}")
         self.conn.commit()
 
     def insert(self, question_text: str, answer_text: str,

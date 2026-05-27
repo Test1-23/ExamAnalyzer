@@ -12,6 +12,7 @@ import hashlib
 import threading
 import traceback
 import statistics
+from contextlib import contextmanager
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable, Optional
@@ -23,6 +24,35 @@ from .pdf_extractor import extract_pdf
 from .embedding_cluster import detect_content_lang, TOPIC_EMBED_MODEL
 
 
+# ============================================================
+# Unified error handling
+# ============================================================
+
+class PipelineError(Exception):
+    """Pipeline error with severity: fatal | recoverable | degraded."""
+    def __init__(self, message: str, severity: str = "recoverable"):
+        super().__init__(message)
+        self.severity = severity
+
+
+def _log_stage_error(stage: str, debug: callable, exc: Exception):
+    """Standardized error logging for any pipeline stage."""
+    debug(f"[{stage}] {type(exc).__name__}: {exc}")
+    debug(traceback.format_exc())
+
+
+def _get_worker_limit(n: int, api_heavy: bool = False) -> int:
+    """Dynamic worker limit: configurable via env, with sensible defaults.
+
+    PIPELINE_MAX_WORKERS env var overrides the cap. Otherwise:
+      - General (CPU work): cap at 16
+      - API-heavy (rate limited): cap at 8
+    """
+    env_override = os.environ.get("PIPELINE_MAX_WORKERS", "")
+    if env_override.isdigit():
+        return min(n, int(env_override))
+    cap = 8 if api_heavy else 16
+    return min(n, cap)
 
 
 # ============================================================
@@ -422,7 +452,7 @@ def run_pipeline(
                 return qa_id
 
             tracker.step("QA pairing")  # Stage 2 complete
-            with ThreadPoolExecutor(max_workers=min(len(qa_pairs), 16)) as executor:
+            with ThreadPoolExecutor(max_workers=_get_worker_limit(len(qa_pairs))) as executor:
                 futures = {executor.submit(_phase1_worker, qa): qa for qa in qa_pairs}
                 for future in as_completed(futures):
                     try:
@@ -574,7 +604,7 @@ def run_pipeline(
 
             tracker.step("QA pairing")  # Stage 2 complete
             qa_results = []
-            with ThreadPoolExecutor(max_workers=min(len(qa_pairs), 16)) as executor:
+            with ThreadPoolExecutor(max_workers=_get_worker_limit(len(qa_pairs))) as executor:
                 futures = {executor.submit(_process_one_question, qa): qa for qa in qa_pairs}
                 for future in as_completed(futures):
                     try:
@@ -917,7 +947,7 @@ def _flash_review_merges(ambiguous: list, db: QADatabase, client, debug: Callabl
             debug(f"  Flash merge review failed for '{t1}'/'{t2}': {e}")
         return None
 
-    with ThreadPoolExecutor(max_workers=min(len(ambiguous), 16)) as executor:
+    with ThreadPoolExecutor(max_workers=_get_worker_limit(len(ambiguous), api_heavy=True)) as executor:
         futures = {executor.submit(_review_one, t1, t2, cos): (t1, t2) for t1, t2, cos in ambiguous}
         for future in as_completed(futures):
             result = future.result()
@@ -1301,7 +1331,7 @@ def _distill_points(db: QADatabase, client, debug: Callable) -> str:
     batched_topics = set()
 
     if batches or large_topics:
-        with ThreadPoolExecutor(max_workers=min(len(batches) + len(large_topics), 16)) as executor:
+        with ThreadPoolExecutor(max_workers=_get_worker_limit(len(batches) + len(large_topics), api_heavy=True)) as executor:
             future_map = {}
 
             # Submit batch tasks
