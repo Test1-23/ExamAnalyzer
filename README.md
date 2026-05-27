@@ -207,3 +207,16 @@ PDF → QA pairs → KB (SQLite) → retrieval → Flash answering → grading
 - **难度评估无 ground truth**：基于 Flash 行为信号（miss_rate），与学生真实感知可能有偏差
 - **Embedding 模型语言锁定**：首篇论文的语言决定检索模型，跨语言场景精度下降
 - **Topic 名称多样性**：不同论文的 Mark Scheme 用词不同——这是有意的，学生需要识别变体命名
+
+## License
+
+本项目基于 **GNU Affero General Public License v3.0 (AGPL-3.0)** 许可。
+
+**核心要求**：任何使用、修改或部署本软件的组织和个人，必须将其修改后的源代码公开。
+
+- 如果你只是在本地运行——无需公开任何东西
+- 如果你修改了代码并部署为公开服务（包括网站、API）——必须公开你的修改
+- 如果你将本软件或衍生作品分发给他人——必须同时提供完整源代码
+- 本条目不阻止商业使用，但要求商业用户同样履行开源义务
+
+详见 [LICENSE](LICENSE) 文件。
