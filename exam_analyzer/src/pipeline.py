@@ -725,10 +725,23 @@ def run_pipeline(
 
     # -- Adversarial refinement: challenger/defender debate on KP quality --
     try:
-        from .adversarial_refiner import run_adversarial_refinement
+        from .adversarial_refiner import run_adversarial_refinement, auto_split_kp, auto_merge_kps
         _debug("Running adversarial refinement on KPs...")
         run_adversarial_refinement(db_path, api_url, api_key,
                                    debug_callback=_debug)
+        # Auto-split over-broad KPs
+        kps = db.get_all_kps()
+        for kp in kps:
+            if kp.get("evidence_count", 0) >= 6:
+                auto_split_kp(db, kp["id"], client, debug_cb=_debug)
+        # Auto-merge KPs flagged by cross-consistency
+        from .adversarial_refiner import cross_kp_consistency
+        all_kp_ids = [k["id"] for k in db.get_all_kps()]
+        if len(all_kp_ids) >= 2:
+            consistency = cross_kp_consistency(db, all_kp_ids[:30], client, debug_cb=_debug)
+            merged_count = auto_merge_kps(db, consistency.get("issues", []), debug_cb=_debug)
+            if merged_count:
+                _debug(f"Auto-merge: {merged_count} KP pairs merged")
     except Exception as e:
         _debug(f"Adversarial refinement failed (non-fatal): {e}")
         _debug(traceback.format_exc())
@@ -1419,67 +1432,169 @@ def _run_evolution_cycle(db: QADatabase, client, debug: Callable):
     except Exception as e:
         debug(f"  Student feedback loop failed (non-fatal): {e}")
 
+    # Detect outlier QAs — potential new topics
+    try:
+        outlier_count = _detect_outlier_qas(db, debug)
+        if outlier_count:
+            debug(f"Evolution: {outlier_count} outlier QAs flagged for review")
+    except Exception as e:
+        debug(f"  Outlier detection failed (non-fatal): {e}")
+
+
+# ============================================================
+# Outlier QA detection
+# ============================================================
+
+def _detect_outlier_qas(db: QADatabase, debug: Callable) -> int:
+    """Detect QAs drifting from their topic centroid — potential new topics.
+
+    For each topic with >= 5 QAs, computes the centroid of answer embeddings
+    and flags QAs whose cosine distance to centroid exceeds 2 standard deviations.
+    """
+    groups = db.get_topic_groups()
+    if not groups:
+        return 0
+
+    from .embedding_cluster import TOPIC_EMBED_MODEL, _get_model
+    model = _get_model(TOPIC_EMBED_MODEL)
+    flagged = 0
+
+    for topic, qas in groups.items():
+        if not topic or topic == "(uncategorized)" or len(qas) < 5:
+            continue
+
+        answer_texts = [qa["answer_text"] for qa in qas]
+        if not any(answer_texts):
+            continue
+
+        try:
+            vecs = model.encode(answer_texts, normalize_embeddings=True,
+                               convert_to_numpy=True, show_progress_bar=False)
+        except Exception:
+            continue
+
+        centroid = np.mean(vecs, axis=0)
+        centroid = centroid / (np.linalg.norm(centroid) or 1.0)
+
+        distances = [float(1.0 - np.dot(vecs[i], centroid)) for i in range(len(vecs))]
+        if len(distances) < 3:
+            continue
+
+        mean_dist = sum(distances) / len(distances)
+        stdev = (sum((d - mean_dist) ** 2 for d in distances) / len(distances)) ** 0.5
+        if stdev < 0.01:
+            continue
+
+        for i, d in enumerate(distances):
+            if d > mean_dist + 2.0 * stdev and d > 0.25:
+                qa = qas[i]
+                db.conn.execute(
+                    "UPDATE qa_pairs SET last_failure_reason=? WHERE id=?",
+                    (f"outlier: dist={d:.3f} from topic '{topic}' centroid", qa["id"]),
+                )
+                db.conn.commit()
+                flagged += 1
+
+    return flagged
+
 
 # ============================================================
 # Post-distillation review
 # ============================================================
 
 def _review_distilled(content: str, client, topic_links: dict, topic_related: dict, debug: Callable) -> str:
-    """Post-distillation review: check for duplicates, mismatches, formatting.
-    Also inserts See also / Related lines from topic_links and topic_related."""
+    """Post-distillation review in focused batches.
+
+    Batch A (LLM): structural — duplicates, topic mismatches (checks 1-2)
+    Batch B (LLM): content — scoring examples, calculation steps (checks 7-8)
+    Rules-based: formatting normalization (checks 3-6)
+    Then insert See also / Related from topic_links and topic_related.
+    """
     if not content.strip() or len(content) < 500:
         return content
 
     lang = detect_content_lang(content)
+
+    # ---- Batch A: Structural review (checks 1-2) ----
     if lang == 'en':
-        sys = "You are a knowledge base reviewer. Check for quality issues. Output JSON."
-        usr = (f"{content}\n\n"
-               "=== Review tasks ===\n"
-               "Pay extra attention to KPs marked (review) — these have low distillation confidence and need more thorough checking.\n\n"
-               "Fix these issues and return the corrected file:\n"
-               "1. Duplicate KPs across topics -> merge into best topic\n"
-               "2. KP content contradicts its topic name OR topic name is too broad/narrow for its content -> fix topic or remove\n"
-               "3. KP depends on original question context -> add explanation\n"
-               "4. Missing cross-references between related topics -> add See also\n"
-               "5. Inconsistent formatting (bullet styles, punctuation) -> unify\n"
-               "6. Mixed language terminology -> normalize to match source language\n"
-               "7. Scoring fields that only state 'what earns marks' without a concrete example answer sentence -> supplement with a sample sentence in quotes\n"
-               "8. For calculation KPs, scoring missing step-by-step mark allocation -> add mark breakdown per step\n\n"
-               "Preserve existing structure. Only fix clear issues.\n"
-               'Return JSON: {"content": "corrected file content"}')
+        sys_a = "You are a knowledge base reviewer. Find structural issues. Output JSON."
+        usr_a = (f"{content}\n\n"
+                 "Fix these structural issues:\n"
+                 "1. Duplicate KPs across topics — merge into best topic\n"
+                 "2. KP content contradicts its topic name OR topic name is too broad/narrow — fix topic or remove\n"
+                 "Preserve everything else as-is.\n"
+                 'Return JSON: {"content": "corrected file content"}')
     else:
-        sys = "你是一个知识库审核专家。检查以下知识点文件的质量问题。Output JSON."
-        usr = (f"{content}\n\n"
-               "=== 审核任务 ===\n"
-               "对标记为 (review) 的知识点给予额外关注——这些条目的蒸馏置信度较低，需要更仔细地审核。\n\n"
-               "检查以下问题并返回修正后的完整文件:\n"
-               "1. 不同 topic 下是否有内容高度重复的 KP? -> 合并到最合适的 topic\n"
-               "2. 是否有 KP 的内容与 topic 名明显矛盾? 或 topic 名相对于内容过于宽泛/狭窄? -> 修正 topic 名或移除\n"
-               "3. 是否有 KP 过度依赖原题上下文? -> 补充必要说明\n"
-               "4. 相关 topic 之间是否缺少交叉引用? -> 添加 See also\n"
-               "5. 格式不一致（列表样式、标点）-> 统一\n"
-               "6. 中英文术语混杂 -> 统一为原文语言\n"
-               "7. Scoring 字段是否只写了得分条件而没有具体的答案示例句子? -> 补充一句带引号的完整答案范例\n"
-               "8. 计算类 KP 的 Scoring 是否缺少分步给分说明? -> 补充每一步的分值\n\n"
-               "保持原有格式。只修正明确的问题。\n"
-               '返回 JSON: {"content": "修正后的完整文件内容"}')
+        sys_a = "你是知识库结构审核专家。查找结构问题。Output JSON。"
+        usr_a = (f"{content}\n\n"
+                 "修复以下结构问题:\n"
+                 "1. 不同topic下的重复KP — 合并到最合适的topic\n"
+                 "2. KP内容与topic名矛盾或topic名不匹配 — 修正topic名或移除\n"
+                 "保留其他内容不变。\n"
+                 '返回 JSON: {"content": "修正后的完整文件"}')
 
-    messages = [{"role": "system", "content": sys}, {"role": "user", "content": usr}]
+    reviewed = content
     try:
-        result = call_flash(client, messages, max_retries=1, debug_callback=debug)
-        if isinstance(result, dict):
-            reviewed = result.get("content", content)
-        else:
-            reviewed = str(result) if result and len(str(result)) > 100 else content
+        result = call_flash(client, [{"role": "system", "content": sys_a},
+                                      {"role": "user", "content": usr_a}],
+                           max_retries=1, debug_callback=debug)
+        if isinstance(result, dict) and result.get("content"):
+            reviewed = result["content"]
     except Exception as e:
-        debug(f"  review failed: {e}")
-        reviewed = content
+        debug(f"  review batch A failed: {e}")
 
-    # Post-process: insert See also from accumulated topic_links + topic_related
+    # ---- Batch B: Content review (checks 7-8) ----
+    if lang == 'en':
+        sys_b = "You are a knowledge base reviewer. Fix scoring-related issues. Output JSON."
+        usr_b = (f"{reviewed}\n\n"
+                 "Fix these content issues:\n"
+                 "7. Scoring fields missing concrete example answer sentence — add a sample full-mark answer in quotes\n"
+                 "8. Calculation KPs scoring missing step-by-step mark allocation — add mark breakdown per step\n"
+                 "Preserve everything else as-is.\n"
+                 'Return JSON: {"content": "corrected file content"}')
+    else:
+        sys_b = "你是知识库内容审核专家。修复评分相关问题。Output JSON。"
+        usr_b = (f"{reviewed}\n\n"
+                 "修复以下内容问题:\n"
+                 "7. Scoring字段缺少具体答案示例 — 补充带引号的完整答案范例\n"
+                 "8. 计算类KP的Scoring缺少分步给分 — 补充每步分值\n"
+                 "保留其他内容不变。\n"
+                 '返回 JSON: {"content": "修正后的完整文件"}')
+
+    try:
+        result = call_flash(client, [{"role": "system", "content": sys_b},
+                                      {"role": "user", "content": usr_b}],
+                           max_retries=1, debug_callback=debug)
+        if isinstance(result, dict) and result.get("content"):
+            reviewed = result["content"]
+    except Exception as e:
+        debug(f"  review batch B failed: {e}")
+
+    # ---- Rules-based pass: formatting normalization (checks 3-6) ----
+    reviewed = _normalize_formatting(reviewed)
+
+    # ---- Insert See also from accumulated topic_links + topic_related ----
     if topic_links or topic_related:
         reviewed = _insert_see_also(reviewed, topic_links, topic_related, debug)
 
     return reviewed
+
+
+def _normalize_formatting(content: str) -> str:
+    """Rules-based formatting normalization (no LLM call)."""
+    lines = content.split("\n")
+    result = []
+    for line in lines:
+        # Normalize bullet styles: ensure consistent "- " or "  - " prefix
+        if line.startswith("- ") or line.startswith("* "):
+            line = "  - " + line[2:].strip()
+        # Strip trailing whitespace
+        line = line.rstrip()
+        # Normalize multiple blank lines to single
+        if not line.strip() and result and not result[-1].strip():
+            continue
+        result.append(line)
+    return "\n".join(result)
 
 
 def _insert_see_also(content: str, topic_links: dict, topic_related: dict, debug: Callable) -> str:

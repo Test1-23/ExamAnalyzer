@@ -348,3 +348,152 @@ def run_adversarial_refinement(db_path: str, api_url: str, api_key: str,
         _debug("Adversarial refinement complete")
     finally:
         db.close()
+
+
+# ============================================================
+# KP auto-split: actually split over-broad KPs into two
+# ============================================================
+
+def auto_split_kp(db: QADatabase, kp_id: str, client, debug_cb=None) -> list[str]:
+    """Try to split an over-broad KP into two. Returns new KP IDs (empty if no split)."""
+    kp = db.get_kp_by_id(kp_id)
+    if not kp:
+        return []
+
+    qas = db.get_kp_representative_qas(kp_id)
+    if len(qas) < 4:
+        return []
+
+    # Get all member QAs
+    member_rows = db.conn.execute(
+        "SELECT qa_id FROM qa_kp_membership WHERE kp_id=?", (kp_id,)
+    ).fetchall()
+    all_qa_ids = [r["qa_id"] for r in member_rows]
+    if len(all_qa_ids) < 4:
+        return []
+
+    all_qas = db.get_by_ids(all_qa_ids)
+
+    lang = detect_content_lang(
+        (kp.get("core_concept", "") or kp.get("description", "")) +
+        " ".join(qa.get("question_text", "") for qa in all_qas[:2])
+    )
+
+    # Build prompt to decide if and how to split
+    qa_texts = ""
+    for i, qa in enumerate(all_qas[:10]):
+        qa_texts += f"[{qa['id']}] {qa['question_text'][:200]}\n  A: {qa['answer_text'][:200]}\n\n"
+
+    if lang == 'en':
+        sys = "Decide whether this KP should be split into two. Output JSON."
+        usr = (
+            f"KP: [{kp['name']}] — {kp.get('core_concept', '') or kp.get('description', '')}\n\n"
+            f"Member QAs:\n{qa_texts}\n"
+            "Should this KP be split? If yes, provide two sub-concepts and assign each QA to one.\n"
+            'Return: {"split": true/false, "kp_a": {"concept": "...", "qa_ids": [1,2]}, '
+            '"kp_b": {"concept": "...", "qa_ids": [3,4]}}'
+        )
+    else:
+        sys = "判断此KP是否应拆分为两个。Output JSON。"
+        usr = (
+            f"KP: [{kp['name']}] — {kp.get('core_concept', '') or kp.get('description', '')}\n\n"
+            f"成员QA:\n{qa_texts}\n"
+            "此KP是否应拆分？若是，提供两个子概念并分配QA。\n"
+            '返回: {"split": true/false, "kp_a": {"concept": "...", "qa_ids": [1,2]}, '
+            '"kp_b": {"concept": "...", "qa_ids": [3,4]}}'
+        )
+
+    messages = [{"role": "system", "content": sys}, {"role": "user", "content": usr}]
+    try:
+        result = call_flash(client, messages, max_retries=1, debug_callback=debug_cb)
+    except Exception as e:
+        if debug_cb:
+            debug_cb(f"  Auto-split failed for {kp_id}: {e}")
+        return []
+
+    if not isinstance(result, dict) or not result.get("split"):
+        return []
+
+    new_ids = []
+    for key in ("kp_a", "kp_b"):
+        sub = result.get(key, {})
+        if not sub or not sub.get("concept"):
+            continue
+        new_id = f"{kp_id}s{len(new_ids)}"
+        sub_qa_ids = [int(i) for i in sub.get("qa_ids", []) if isinstance(i, (int, float))]
+        db.upsert_kp(kp_id=new_id, name=f"{kp['name']} ({chr(97+len(new_ids))})",
+                     description=sub["concept"], core_concept=sub["concept"],
+                     core_detail="", cohesion=kp.get("cohesion"),
+                     evidence_count=len(sub_qa_ids), quality="draft")
+        for qa_id in sub_qa_ids:
+            db.conn.execute(
+                "INSERT OR REPLACE INTO qa_kp_membership (qa_id, kp_id, membership_strength) VALUES (?, ?, 0.8)",
+                (qa_id, new_id),
+            )
+        db.conn.commit()
+        new_ids.append(new_id)
+
+    if new_ids and debug_cb:
+        debug_cb(f"  Auto-split KP {kp_id} into {len(new_ids)} KPs: {new_ids}")
+
+    return new_ids
+
+
+# ============================================================
+# KP auto-merge: actually merge KPs flagged as duplicates
+# ============================================================
+
+def auto_merge_kps(db: QADatabase, issues: list[dict], debug_cb=None) -> int:
+    """Merge KPs flagged by cross_kp_consistency. Returns number merged."""
+    merged = 0
+    for issue in issues:
+        suggestion = (issue.get("suggestion", "") or "").lower()
+        if "merge" not in suggestion:
+            continue
+
+        kp_a = issue.get("kp_a", "")
+        kp_b = issue.get("kp_b", "")
+        if not kp_a or not kp_b or kp_a == kp_b:
+            continue
+
+        kp_a_data = db.get_kp_by_id(kp_a)
+        kp_b_data = db.get_kp_by_id(kp_b)
+        if not kp_a_data or not kp_b_data:
+            continue
+
+        # Merge B into A (A is the "better" one — more evidence or higher quality)
+        if (kp_b_data.get("evidence_count", 0) > kp_a_data.get("evidence_count", 0)):
+            kp_a, kp_b = kp_b, kp_a
+
+        # Move all QAs from B to A
+        db.conn.execute(
+            "UPDATE qa_kp_membership SET kp_id=? WHERE kp_id=?",
+            (kp_a, kp_b),
+        )
+        # Re-route edges from B to A
+        db.conn.execute(
+            "UPDATE kp_edges SET source_kp=? WHERE source_kp=?",
+            (kp_a, kp_b),
+        )
+        db.conn.execute(
+            "UPDATE kp_edges SET target_kp=? WHERE target_kp=?",
+            (kp_a, kp_b),
+        )
+        # Delete B
+        db.conn.execute("DELETE FROM knowledge_points WHERE id=?", (kp_b,))
+        db.conn.commit()
+
+        db.record_evolution(
+            kp_id=kp_a,
+            trigger_type="auto_merge",
+            trigger_detail=f"Merged {kp_b} into {kp_a}: {issue.get('issue', '')}",
+            old_state=f"two separate KPs",
+            new_state=f"merged into {kp_a}",
+            outcome="completed",
+        )
+        merged += 1
+
+        if debug_cb:
+            debug_cb(f"  Auto-merge: {kp_b} → {kp_a} ({issue.get('issue', '')})")
+
+    return merged
