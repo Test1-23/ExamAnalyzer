@@ -145,7 +145,7 @@ def _phase1_extract_verbs(qas, db, client, debug_cb, progress_cb):
 
     if batches:
         from concurrent.futures import ThreadPoolExecutor, as_completed
-        max_w = min(len(batches), int(os.environ.get("PIPELINE_MAX_WORKERS", "8")))
+        max_w = max(1, min(len(batches), int(os.environ.get("PIPELINE_MAX_WORKERS", "8"))))
         with ThreadPoolExecutor(max_workers=max_w) as executor:
             futures = [executor.submit(_extract_batch, b) for b in batches]
             for future in as_completed(futures):
@@ -315,7 +315,7 @@ def _phase3_summarize_patterns(verb_groups, verb_stats, db, client, debug_cb):
         return verb
 
     from concurrent.futures import ThreadPoolExecutor, as_completed
-    max_w = min(len(verbs_to_process), int(os.environ.get("PIPELINE_MAX_WORKERS", "8")))
+    max_w = max(1, min(len(verbs_to_process), int(os.environ.get("PIPELINE_MAX_WORKERS", "8"))))
     with ThreadPoolExecutor(max_workers=max_w) as executor:
         futures = {executor.submit(_summarize_one, v, q): v for v, q in verbs_to_process}
         for future in as_completed(futures):
@@ -958,7 +958,7 @@ def _phase1_validate_candidates(db, candidates, client, debug_cb):
     validated = []
     if batches:
         from concurrent.futures import ThreadPoolExecutor, as_completed
-        max_w = min(len(batches), int(os.environ.get("PIPELINE_MAX_WORKERS", "8")))
+        max_w = max(1, min(len(batches), int(os.environ.get("PIPELINE_MAX_WORKERS", "8"))))
         with ThreadPoolExecutor(max_workers=max_w) as executor:
             futures = {executor.submit(_validate_batch, b): b for b in batches}
             for future in as_completed(futures):

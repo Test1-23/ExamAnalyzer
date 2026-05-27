@@ -110,8 +110,8 @@ def _generate_param_value(param: dict, difficulty: str) -> str:
         else:
             return str(random.randint(100, 10000))
 
-    # Default: return example value
-    return example
+    # Default: return example value (Flash may return int, ensure str)
+    return str(example)
 
 
 def generate_answer(question: str, kp_id: str, db: QADatabase, client, debug_cb=None) -> dict:

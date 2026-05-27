@@ -259,7 +259,7 @@ def cross_kp_consistency(db: QADatabase, kp_ids: list[str], client, debug_cb=Non
     all_issues = []
     if batches:
         from concurrent.futures import ThreadPoolExecutor, as_completed
-        max_w = min(len(batches), int(os.environ.get("PIPELINE_MAX_WORKERS", "8")))
+        max_w = max(1, min(len(batches), int(os.environ.get("PIPELINE_MAX_WORKERS", "8"))))
         with ThreadPoolExecutor(max_workers=max_w) as executor:
             futures = {executor.submit(_check_batch, b): b for b in batches}
             for future in as_completed(futures):
@@ -311,7 +311,7 @@ def run_adversarial_refinement(db_path: str, api_url: str, api_key: str,
                 refine_kp(db, kp["id"], client, _debug)
                 return kp["id"]
 
-            max_w = min(len(refine_targets), int(os.environ.get("PIPELINE_MAX_WORKERS", "8")))
+            max_w = max(1, min(len(refine_targets), int(os.environ.get("PIPELINE_MAX_WORKERS", "8"))))
             with ThreadPoolExecutor(max_workers=max_w) as executor:
                 futures = {executor.submit(_refine_one, kp): kp for kp in refine_targets}
                 for future in as_completed(futures):

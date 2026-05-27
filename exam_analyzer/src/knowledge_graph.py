@@ -7,6 +7,7 @@ Phase 2 retrieval behavior, embedding similarity, exam ordering, and student pat
 """
 
 import os
+import re
 from collections import deque
 import numpy as np
 
@@ -16,6 +17,12 @@ from .embedding_cluster import _get_model, detect_content_lang, TOPIC_EMBED_MODE
 from .logger import get_logger
 
 _log = get_logger()
+
+
+def _parse_kp_cluster_idx(kp_id: str) -> int | None:
+    """Extract cluster index from KP ID, handling auto-split suffixes like 'kp_0000s0'."""
+    m = re.match(r'kp_(\d+)', kp_id)
+    return int(m.group(1)) if m else None
 
 
 def _build_similarity_graph(qa_vectors, threshold=0.70):
@@ -263,7 +270,7 @@ def generate_kps(db: QADatabase, clustering: dict, client, debug_cb=None) -> lis
         return batch_results
 
     from concurrent.futures import ThreadPoolExecutor, as_completed
-    max_w = min(len(batches), int(os.environ.get("PIPELINE_MAX_WORKERS", "8")))
+    max_w = max(1, min(len(batches), int(os.environ.get("PIPELINE_MAX_WORKERS", "8"))))
     with ThreadPoolExecutor(max_workers=max_w) as executor:
         futures = {executor.submit(_name_batch, s, c): s for s, c in batches}
         for future in as_completed(futures):
@@ -301,8 +308,10 @@ def discover_kp_edges(db: QADatabase, clustering: dict, kp_ids: list[str],
     # Build KP centroid matrix for semantic edges
     kp_centroids = {}
     for kp_id in kp_ids:
-        cluster_idx = int(kp_id.split("_")[1])
-        if cluster_idx < len(centroids_list) and centroids_list[cluster_idx] is not None:
+        cluster_idx = _parse_kp_cluster_idx(kp_id)
+        if (cluster_idx is not None
+                and cluster_idx < len(centroids_list)
+                and centroids_list[cluster_idx] is not None):
             kp_centroids[kp_id] = centroids_list[cluster_idx]
 
     # Semantic edges: cosine between KP centroids
@@ -331,8 +340,8 @@ def discover_kp_edges(db: QADatabase, clustering: dict, kp_ids: list[str],
         # Build QA index → KP mapping
         qa_to_kp = {}
         for kp_id in kp_ids:
-            cluster_idx = int(kp_id.split("_")[1])
-            if cluster_idx < len(clusters):
+            cluster_idx = _parse_kp_cluster_idx(kp_id)
+            if cluster_idx is not None and cluster_idx < len(clusters):
                 for qa_idx in clusters[cluster_idx]:
                     qa_to_kp[qa_list[qa_idx]["id"]] = kp_id
 
@@ -378,7 +387,7 @@ def discover_sequential_edges(db: QADatabase, clustering: dict, kp_ids: list[str
     # Build QA → KP mapping
     qa_to_kp = {}
     for kp_id in kp_ids:
-        cluster_idx = int(kp_id.split("_")[1])
+        cluster_idx = _parse_kp_cluster_idx(kp_id)
         if cluster_idx < len(clusters):
             for qa_idx in clusters[cluster_idx]:
                 qa_to_kp[qa_list[qa_idx]["id"]] = kp_id

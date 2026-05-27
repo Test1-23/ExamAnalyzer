@@ -50,9 +50,9 @@ def _get_worker_limit(n: int, api_heavy: bool = False) -> int:
     """
     env_override = os.environ.get("PIPELINE_MAX_WORKERS", "")
     if env_override.isdigit():
-        return min(n, int(env_override))
+        return max(1, min(n, int(env_override)))
     cap = 8 if api_heavy else 16
-    return min(n, cap)
+    return max(1, min(n, cap))
 
 
 # ============================================================
@@ -750,8 +750,7 @@ def run_pipeline(
                             debug_callback=_debug,
                             progress_callback=_progress)
     except Exception as e:
-        _debug(f"Knowledge graph construction failed (non-fatal): {e}")
-        _debug(traceback.format_exc())
+        _log_stage_error("Knowledge graph", _debug, e)
 
     # -- Adversarial refinement: challenger/defender debate on KP quality --
     try:
@@ -773,8 +772,7 @@ def run_pipeline(
             if merged_count:
                 _debug(f"Auto-merge: {merged_count} KP pairs merged")
     except Exception as e:
-        _debug(f"Adversarial refinement failed (non-fatal): {e}")
-        _debug(traceback.format_exc())
+        _log_stage_error("Adversarial refinement", _debug, e)
 
     # -- Offline analysis (command verbs, difficulty, dependencies) --
     try:
@@ -785,8 +783,7 @@ def run_pipeline(
                              progress_callback=_progress,
                              debug_callback=_debug)
     except Exception as e:
-        _debug(f"Offline analysis failed (non-fatal): {e}")
-        _debug(traceback.format_exc())
+        _log_stage_error("Offline analysis", _debug, e)
 
     # -- Pipeline diagnostics (closed-loop + cross-paper) --
     try:
@@ -795,15 +792,13 @@ def run_pipeline(
         run_closed_loop(db_path, api_url, api_key,
                         debug_callback=_debug)
     except Exception as e:
-        _debug(f"Closed-loop improvements failed (non-fatal): {e}")
-        _debug(traceback.format_exc())
+        _log_stage_error("Closed-loop diagnostics", _debug, e)
 
     # -- Self-evolving loop: detect drift, trigger re-review --
     try:
         _run_evolution_cycle(db, client, _debug)
     except Exception as e:
-        _debug(f"Evolution cycle failed (non-fatal): {e}")
-        _debug(traceback.format_exc())
+        _log_stage_error("Evolution cycle", _debug, e)
 
     _progress(100, "Analysis complete")
     db.close()
@@ -1624,7 +1619,6 @@ def _normalize_formatting(content: str) -> str:
         # Normalize bullet styles: ensure consistent "  - " prefix
         stripped = line.strip()
         if stripped.startswith("- ") or stripped.startswith("* "):
-            indent = len(line) - len(line.lstrip())
             line = "  " + "- " + stripped[2:]
         # Strip trailing whitespace
         line = line.rstrip()
