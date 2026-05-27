@@ -1205,6 +1205,7 @@ class QARetriever:
         if not qas:
             self._embeddings = np.empty((0, 384))
             self._id_map = {}
+            self._embed_model_name = None
             return
         # Use raw QA text for corpus embeddings (ground truth, no Flash distortion).
         # knowledge_summary is only used as fallback if QA text is unavailable.
@@ -1284,6 +1285,7 @@ class QARetriever:
     def rebuild(self):
         self._embeddings = None
         self._id_map = {}
+        self._embed_model_name = None
         self._ensure_embeddings()
 
     def count(self) -> int:

@@ -12,7 +12,6 @@ import hashlib
 import threading
 import traceback
 import statistics
-from contextlib import contextmanager
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable, Optional
@@ -684,17 +683,37 @@ def run_pipeline(
         except Exception as e:
             _debug(f"Cross-paper check failed (non-fatal): {e}")
 
-    # -- Topic merge --
-    tracker.set_status("Merging similar topics...")
-    _merge_similar_topics(db, client, _debug)
-    for _ in range(3):
-        tracker.step("")
+    # -- Post-processing core (wrapped: ensures db.close() on failure) --
+    content = ""
+    try:
+        # -- Topic merge --
+        tracker.set_status("Merging similar topics...")
+        _merge_similar_topics(db, client, _debug)
+        for _ in range(3):
+            tracker.step("")
 
-    # -- Distill --
-    tracker.set_status("Distilling knowledge points...")
-    content = _distill_points(db, client, _debug)
-    for _ in range(5):
-        tracker.step("")
+        # -- Distill --
+        tracker.set_status("Distilling knowledge points...")
+        content = _distill_points(db, client, _debug)
+        for _ in range(5):
+            tracker.step("")
+
+        # -- Review + write --
+        content = _review_distilled(content, client, topic_links, topic_related, _debug)
+        tracker.set_status("Writing output...")
+        with open(subject_output, "w", encoding="utf-8") as f:
+            f.write(content)
+            f.flush()
+            os.fsync(f.fileno())
+        _log("Output", f"{db.count()} QAs -> {subject_output}")
+        _progress(95, "Output written")
+    except Exception as e:
+        _log_stage_error("Core post-processing", _debug, e)
+        if not content:
+            content = "; ".join(
+                qa["answer_text"] for g in groups.values() if g
+                for qa in g[:30]
+            )[:10000] or "; No knowledge points extracted."
 
     # Mark representative and cross-topic QAs
     weights = db.get_all_weights()
@@ -729,17 +748,6 @@ def run_pipeline(
                 counts[rt] = counts.get(rt, 0) + 1
         if counts:
             topic_related[topic] = sorted(counts.items(), key=lambda x: -x[1])
-
-    # -- Review --
-    tracker.set_status("Reviewing output...")
-    content = _review_distilled(content, client, topic_links, topic_related, _debug)
-    for _ in range(2):
-        tracker.step("")
-
-    with open(subject_output, "w", encoding="utf-8") as f:
-        f.write(content)
-
-    _log("Output", f"{db.count()} QAs -> {subject_output}")
 
     # -- Knowledge graph: QA clustering → KP nodes → edge discovery --
     try:

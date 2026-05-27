@@ -468,8 +468,13 @@ def auto_merge_kps(db: QADatabase, issues: list[dict], debug_cb=None) -> int:
         if not kp_a_data or not kp_b_data:
             continue
 
-        # Merge B into A (A is the "better" one — more evidence or higher quality)
-        if (kp_b_data.get("evidence_count", 0) > kp_a_data.get("evidence_count", 0)):
+        # Merge worse into better: prefer higher evidence_count, then quality
+        quality_rank = {"verified": 4, "accepted": 3, "draft": 2, "disputed": 1, None: 0}
+        a_score = (kp_a_data.get("evidence_count", 0),
+                   quality_rank.get(kp_a_data.get("quality"), 0))
+        b_score = (kp_b_data.get("evidence_count", 0),
+                   quality_rank.get(kp_b_data.get("quality"), 0))
+        if b_score > a_score:
             kp_a, kp_b = kp_b, kp_a
 
         # Move all QAs from B to A

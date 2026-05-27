@@ -270,9 +270,15 @@ def compute_paper_signature(db: QADatabase, display_name: str = None) -> dict:
     ).fetchall()
     purities = []
     for r in purity_rows:
-        var_rows = db.conn.execute(
-            "SELECT LENGTH(answer_text) as l FROM qa_pairs WHERE topic = ?", (r["topic"],)
-        ).fetchall()
+        if display_name:
+            var_rows = db.conn.execute(
+                "SELECT LENGTH(answer_text) as l FROM qa_pairs WHERE topic = ? AND paper = ?",
+                (r["topic"], display_name),
+            ).fetchall()
+        else:
+            var_rows = db.conn.execute(
+                "SELECT LENGTH(answer_text) as l FROM qa_pairs WHERE topic = ?", (r["topic"],)
+            ).fetchall()
         lens = [v["l"] for v in var_rows]
         if len(lens) >= 2:
             avg_len = sum(lens) / len(lens)
@@ -472,34 +478,35 @@ def run_cross_paper_check(db_path: str, display_name: str = None, debug_callback
         else:
             print(f"[DX] {msg}")
     db = QADatabase(db_path)
-    if db.count() < 10:
-        _debug("Too few QAs for cross-paper check, skipping")
-        db.close()
-        return
-    sig = compute_paper_signature(db, display_name)
-    if display_name and sig["qa_count"] > 0:
-        db.conn.execute(
-            """INSERT OR REPLACE INTO paper_signatures
-               (display_name, qa_count, topic_count, verb_dist, difficulty_dist,
-                avg_miss_rate, avg_answer_length, topic_purity_avg, anomaly_flags)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (display_name, sig["qa_count"], sig["topic_count"],
-             sig["verb_dist"], sig["difficulty_dist"],
-             sig["avg_miss_rate"], sig["avg_answer_length"],
-             sig["topic_purity_avg"], ""),
-        )
-        db.conn.commit()
-    update_baselines(db)
-    if display_name:
-        anomalies = detect_anomalies(db, display_name)
-        if anomalies:
+    try:
+        if db.count() < 10:
+            _debug("Too few QAs for cross-paper check, skipping")
+            return
+        sig = compute_paper_signature(db, display_name)
+        if display_name and sig["qa_count"] > 0:
             db.conn.execute(
-                "UPDATE paper_signatures SET anomaly_flags = ? WHERE display_name = ?",
-                (json.dumps(anomalies), display_name),
+                """INSERT OR REPLACE INTO paper_signatures
+                   (display_name, qa_count, topic_count, verb_dist, difficulty_dist,
+                    avg_miss_rate, avg_answer_length, topic_purity_avg, anomaly_flags)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (display_name, sig["qa_count"], sig["topic_count"],
+                 sig["verb_dist"], sig["difficulty_dist"],
+                 sig["avg_miss_rate"], sig["avg_answer_length"],
+                 sig["topic_purity_avg"], ""),
             )
             db.conn.commit()
-            for a in anomalies:
-                _debug(f"ANOMALY: {a}")
-        else:
-            _debug("No anomalies detected")
-    db.close()
+        update_baselines(db)
+        if display_name:
+            anomalies = detect_anomalies(db, display_name)
+            if anomalies:
+                db.conn.execute(
+                    "UPDATE paper_signatures SET anomaly_flags = ? WHERE display_name = ?",
+                    (json.dumps(anomalies), display_name),
+                )
+                db.conn.commit()
+                for a in anomalies:
+                    _debug(f"ANOMALY: {a}")
+            else:
+                _debug("No anomalies detected")
+    finally:
+        db.close()
