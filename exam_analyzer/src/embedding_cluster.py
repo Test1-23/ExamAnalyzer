@@ -68,10 +68,8 @@ def _detect_language(texts: List[str]) -> str:
 
 def detect_content_lang(text: str) -> str:
     """Return 'zh' if significant Chinese content, else 'en'.
-    Uses CJK character range for speed (no unicodedata call)."""
-    cjk = sum(1 for ch in text if '一' <= ch <= '鿿')
-    alpha = sum(1 for ch in text if ch.isascii() and ch.isalpha())
-    return 'zh' if cjk > alpha * 0.3 else 'en'
+    Uses same criteria as _detect_language for consistency."""
+    return _detect_language([text])
 
 
 MODEL_MAP = {

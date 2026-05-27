@@ -499,12 +499,12 @@ class QADatabase:
             s, t = r["success_count"], r["total_attempts"]
             mean = (s + 1) / (t + 2)
             if t > 0:
-                # Wilson score lower bound (90% one-sided, z=1.645)
+                # Wilson score lower bound (90% one-sided, z=1.282)
                 # Applied to Beta(s+1, t-s+1) posterior parameters
                 a, b = s + 1, t - s + 1
                 n_post = a + b  # = t + 2
                 p_hat = a / n_post
-                z = 1.645
+                z = 1.282
                 z2 = z * z
                 denom = 1.0 + z2 / n_post
                 center = (p_hat + z2 / (2.0 * n_post)) / denom

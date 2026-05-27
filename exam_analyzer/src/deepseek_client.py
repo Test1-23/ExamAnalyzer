@@ -58,7 +58,6 @@ def _extract_json(text: str) -> dict:
                         return json.loads(text[start:i + 1])
                     except json.JSONDecodeError:
                         break
-                    break
     raise ValueError(f"Could not extract JSON from response: {text[:200]}")
 
 

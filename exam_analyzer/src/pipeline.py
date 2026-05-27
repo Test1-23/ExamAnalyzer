@@ -1214,11 +1214,13 @@ def _distill_points(db: QADatabase, client, debug: Callable) -> str:
             qa_ids_hash = ""
             n_qa = 0
             for bt_topic, bt_n_qa, _, bt_marker, _, bt_hash in batch_topics:
-                if bt_topic == t_name:
+                if bt_topic.strip().lower() == t_name.strip().lower():
                     marker = bt_marker
                     n_qa = bt_n_qa
                     qa_ids_hash = bt_hash
                     break
+            else:
+                debug(f"  Batch topic name mismatch: model returned '{t_name}'")
             parts = [f"{t_name}{marker}"]
             for i, kp in enumerate(kps, 1):
                 if isinstance(kp, str):
@@ -1293,16 +1295,6 @@ def _distill_points(db: QADatabase, client, debug: Callable) -> str:
             for item in large_topics:
                 f = executor.submit(_distill_one_topic, *item)
                 future_map[f] = ("single", [item[0]])
-
-            # Submit individual tasks for small topics NOT in any batch (safety net)
-            all_small = {t for t, _, _, _, _, _ in small_topics}
-            for item in small_topics:
-                if item[0] not in batched_topics:
-                    topic = item[0]
-                    if topic not in all_small:
-                        continue
-                    if topic not in [t for t, _, _, _, _, _ in small_topics]:
-                        continue
 
             for future in as_completed(future_map):
                 try:
@@ -1525,7 +1517,7 @@ def _insert_see_also(content: str, topic_links: dict, topic_related: dict, debug
         stripped = line.strip()
         current_topic = ""
         for topic in topics_by_len:
-            if stripped.startswith(topic) and (stripped == topic or stripped[len(topic):].startswith("  ")):
+            if stripped.startswith(topic) and (stripped == topic or stripped[len(topic)] == ' '):
                 current_topic = topic
                 break
             if stripped.startswith(topic + "  [") or stripped.startswith(topic + " ["):
