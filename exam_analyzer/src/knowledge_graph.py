@@ -227,6 +227,16 @@ def generate_kps(db: QADatabase, clustering: dict, client, debug_cb=None) -> lis
                 debug_cb(f"  KP naming batch failed: {e}")
             groups = []
 
+        # Fallback: auto-name clusters that Flash failed to name
+        if not groups:
+            for gi_in_batch, cluster_idx in enumerate(batch_clusters):
+                fallback_topic = qa_list[clusters[cluster_idx][0]].get("topic", "Unnamed")
+                groups.append({
+                    "index": gi_in_batch,
+                    "name": f"{fallback_topic} (auto-{cluster_idx})",
+                    "description": "",
+                })
+
         for g in groups:
             gi = g.get("index", -1)
             if 0 <= gi < len(batch_clusters):

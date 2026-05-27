@@ -1244,13 +1244,13 @@ def _distill_points(db: QADatabase, client, debug: Callable) -> str:
         ]
         try:
             result = call_flash(client, messages, max_retries=1, debug_callback=debug)
-            topics_data = result.get("topics", [])
+            flash_result = result.get("topics", [])
         except Exception as e:
             debug(f"  batch distillation failed: {e}")
-            topics_data = []
+            flash_result = []
 
         batch_results = {}
-        for td in topics_data:
+        for td in flash_result:
             t_name = td.get("topic", "")
             kps = td.get("knowledge_points", [])
             if not t_name or not kps:
@@ -1285,7 +1285,7 @@ def _distill_points(db: QADatabase, client, debug: Callable) -> str:
             db.upsert_distillation_cache(t_name, n_qa, qa_ids_hash, content)
             batch_results[t_name] = content
         # Log topics the model missed from the batch (will fall back to individual)
-        returned_topics = {td.get("topic", "").strip().lower() for td in topics_data}
+        returned_topics = {td.get("topic", "").strip().lower() for td in flash_result}
         for bt_topic, _, _, _, _, _ in batch_topics:
             if bt_topic.strip().lower() not in returned_topics:
                 debug(f"  Batch missed topic '{bt_topic}', falling back to individual")
@@ -1417,20 +1417,26 @@ def _run_evolution_cycle(db: QADatabase, client, debug: Callable):
     if disputed:
         debug(f"Evolution: {len(disputed)} disputed KPs — queuing for re-review")
         from .adversarial_refiner import refine_kp
-        for kp in disputed[:3]:  # Cap at 3 per cycle to control API cost
-            try:
-                result = refine_kp(db, kp["id"], client, debug_cb=debug)
-                new_quality = result.get("quality", kp["quality"])
-                db.record_evolution(
-                    kp_id=kp["id"],
-                    trigger_type="auto_re-review",
-                    trigger_detail="disputed KP re-evaluated in evolution cycle",
-                    old_state=f"quality={kp['quality']}",
-                    new_state=f"quality={new_quality}",
-                    outcome="completed",
-                )
-            except Exception as e:
-                debug(f"  Evolution re-review failed for {kp['id']}: {e}")
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        targets = disputed[:3]  # Cap at 3 per cycle to control API cost
+        with ThreadPoolExecutor(max_workers=min(len(targets), 3)) as executor:
+            futures = {executor.submit(refine_kp, db, kp["id"], client, debug): kp["id"]
+                       for kp in targets}
+            for future in as_completed(futures):
+                kp_id = futures[future]
+                try:
+                    result = future.result()
+                    new_quality = result.get("quality", "unknown")
+                    db.record_evolution(
+                        kp_id=kp_id,
+                        trigger_type="auto_re-review",
+                        trigger_detail="disputed KP re-evaluated in evolution cycle",
+                        old_state="quality=disputed",
+                        new_state=f"quality={new_quality}",
+                        outcome="completed",
+                    )
+                except Exception as e:
+                    debug(f"  Evolution re-review failed for {kp_id}: {e}")
 
     # Detect KPs that have accumulated new QAs since last review
     for kp in kps:
