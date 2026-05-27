@@ -538,24 +538,24 @@ def fuse_all_edges(db: QADatabase, kp_ids: list[str], debug_cb=None):
         # edge_type is part of the PK — if it changes, REPLACE would insert a new row
         # instead of replacing, creating duplicates.
         # Wrap in explicit transaction so DELETE + INSERT are atomic.
-        # Acquire write lock so raw BEGIN doesn't conflict with other writers.
-        with db._write_lock:
-            db.conn.execute("BEGIN")
-            try:
-                db.conn.execute(
-                    "DELETE FROM kp_edges WHERE source_kp = ? AND target_kp = ?",
-                    (src, tgt),
-                )
-                db.upsert_kp_edge(
-                    source_kp=src, target_kp=tgt, edge_type=etype,
-                    retrieval_weight=rw, semantic_weight=sw,
-                    sequential_weight=sq, learning_path_weight=lp,
-                    combined_strength=round(combined, 3), confidence=confidence,
-                )
-                db.conn.commit()
-            except Exception:
-                db.conn.execute("ROLLBACK")
-                raise
+        # Called single-threaded from post-processing; upsert_kp_edge internally
+        # uses _write_lock for per-edge safety.
+        db.conn.execute("BEGIN")
+        try:
+            db.conn.execute(
+                "DELETE FROM kp_edges WHERE source_kp = ? AND target_kp = ?",
+                (src, tgt),
+            )
+            db.upsert_kp_edge(
+                source_kp=src, target_kp=tgt, edge_type=etype,
+                retrieval_weight=rw, semantic_weight=sw,
+                sequential_weight=sq, learning_path_weight=lp,
+                combined_strength=round(combined, 3), confidence=confidence,
+            )
+            db.conn.commit()
+        except Exception:
+            db.conn.execute("ROLLBACK")
+            raise
 
     if debug_cb:
         debug_cb(f"  Edge fusion: {len(grouped)} unique pairs from {len(edges)} edges")
