@@ -1251,7 +1251,12 @@ def _distill_points(db: QADatabase, client, debug: Callable) -> str:
             content = "\n".join(parts)
             db.upsert_distillation_cache(t_name, n_qa, qa_ids_hash, content)
             batch_results[t_name] = content
-        # Topics not returned by the model fall back to individual distillation
+        # Log topics the model missed from the batch (will fall back to individual)
+        returned_topics = {td.get("topic", "").strip().lower() for td in topics_data}
+        for bt_topic, _, _, _, _, _ in batch_topics:
+            if bt_topic.strip().lower() not in returned_topics:
+                debug(f"  Batch missed topic '{bt_topic}', falling back to individual")
+
         return batch_results
 
     def _distill_one_topic(topic, n_qa, qa_texts, marker, qas, qa_ids_hash):
@@ -1584,15 +1589,23 @@ def _normalize_formatting(content: str) -> str:
     """Rules-based formatting normalization (no LLM call)."""
     lines = content.split("\n")
     result = []
+    prev_blank = False
     for line in lines:
-        # Normalize bullet styles: ensure consistent "- " or "  - " prefix
-        if line.startswith("- ") or line.startswith("* "):
-            line = "  - " + line[2:].strip()
+        # Normalize bullet styles: ensure consistent "  - " prefix
+        stripped = line.strip()
+        if stripped.startswith("- ") or stripped.startswith("* "):
+            indent = len(line) - len(line.lstrip())
+            line = "  " + "- " + stripped[2:]
         # Strip trailing whitespace
         line = line.rstrip()
         # Normalize multiple blank lines to single
-        if not line.strip() and result and not result[-1].strip():
-            continue
+        is_blank = not line.strip()
+        if is_blank:
+            if prev_blank:
+                continue
+            prev_blank = True
+        else:
+            prev_blank = False
         result.append(line)
     return "\n".join(result)
 

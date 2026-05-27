@@ -430,6 +430,11 @@ def auto_split_kp(db: QADatabase, kp_id: str, client, debug_cb=None) -> list[str
                 "INSERT OR REPLACE INTO qa_kp_membership (qa_id, kp_id, membership_strength) VALUES (?, ?, 0.8)",
                 (qa_id, new_id),
             )
+            # Remove from parent KP to avoid duplicate membership
+            db.conn.execute(
+                "DELETE FROM qa_kp_membership WHERE qa_id=? AND kp_id=?",
+                (qa_id, kp_id),
+            )
         db.conn.commit()
         new_ids.append(new_id)
 
@@ -470,15 +475,29 @@ def auto_merge_kps(db: QADatabase, issues: list[dict], debug_cb=None) -> int:
             "UPDATE qa_kp_membership SET kp_id=? WHERE kp_id=?",
             (kp_a, kp_b),
         )
-        # Re-route edges from B to A
-        db.conn.execute(
-            "UPDATE kp_edges SET source_kp=? WHERE source_kp=?",
-            (kp_a, kp_b),
-        )
-        db.conn.execute(
-            "UPDATE kp_edges SET target_kp=? WHERE target_kp=?",
-            (kp_a, kp_b),
-        )
+        # Re-route edges from B to A, deduplicating conflicts
+        edges = db.conn.execute(
+            "SELECT source_kp, target_kp, edge_type, retrieval_weight, semantic_weight, "
+            "sequential_weight, learning_path_weight, combined_strength, confidence "
+            "FROM kp_edges WHERE source_kp=? OR target_kp=?",
+            (kp_b, kp_b),
+        ).fetchall()
+        db.conn.execute("DELETE FROM kp_edges WHERE source_kp=? OR target_kp=?", (kp_b, kp_b))
+        for edge in edges:
+            new_src = kp_a if edge["source_kp"] == kp_b else edge["source_kp"]
+            new_tgt = kp_a if edge["target_kp"] == kp_b else edge["target_kp"]
+            if new_src == new_tgt:
+                continue
+            db.upsert_kp_edge(
+                source_kp=new_src, target_kp=new_tgt,
+                edge_type=edge["edge_type"],
+                retrieval_weight=edge["retrieval_weight"],
+                semantic_weight=edge["semantic_weight"],
+                sequential_weight=edge["sequential_weight"],
+                learning_path_weight=edge["learning_path_weight"],
+                combined_strength=edge["combined_strength"],
+                confidence=edge["confidence"],
+            )
         # Delete B
         db.conn.execute("DELETE FROM knowledge_points WHERE id=?", (kp_b,))
         db.conn.commit()
