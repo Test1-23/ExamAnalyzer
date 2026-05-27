@@ -89,7 +89,7 @@ python tests/test_suite.py chat     # 聊天端点测试
 | LLM | DeepSeek Flash (提取/评分) + Pro (复杂推理，可选) |
 | Embedding | sentence-transformers (all-MiniLM-L6-v2 / paraphrase-multilingual-MiniLM-L12-v2) |
 | 数据库 | SQLite WAL 模式 |
-| PDF 提取 | pdfplumber (主) + PyMuPDF (fallback) |
+| PDF 提取 | pdfplumber (主) + PyMuPDF (fallback)，仅提取文本层，不支持 OCR/图片 |
 | Web | Flask + Jinja2 |
 | 聚类 | 余弦相似图连通分量 (HDBSCAN 备选) |
 
@@ -197,6 +197,11 @@ PDF → QA pairs → KB (SQLite) → retrieval → Flash answering → grading
 
 ### 已知限制
 
+- **无法处理图片型 PDF**：系统依赖 `pdfplumber` + `PyMuPDF` 提取**文本层**，不具备 OCR 能力。
+  - 扫描件 PDF（整页为图片）会提取到空白内容，导致分析失败
+  - 内嵌图片中的文字（如流程图标注、截图公式）会被完全忽略
+  - 图表、示意图等视觉信息无法被提取和理解
+  - 如果你的 PDF 是扫描版，需先用 OCR 工具（如 Adobe Acrobat、Tesseract）将其转为可搜索 PDF
 - **内容准确性需人工审核**：LLM 缺乏精确领域知识，输出应视为强草稿
 - **Pitfalls 为推论而非经验**：系统无真实学生错题数据，pitfall 来自模型推断
 - **难度评估无 ground truth**：基于 Flash 行为信号（miss_rate），与学生真实感知可能有偏差
