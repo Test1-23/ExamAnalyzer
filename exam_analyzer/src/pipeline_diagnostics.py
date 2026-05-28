@@ -516,38 +516,57 @@ def run_cross_paper_check(db_path: str, display_name: str = None, debug_callback
 # Phase 2: Fragment migration + Topic stability
 # ═══════════════════════════════════════════════════════════════
 
-def _compute_loyalty(db: QADatabase, fragment_id: str, topic_id: str) -> float:
-    """How well does fragment P align with its current topic?"""
-    p_helped = db.get_fragment_help_count(fragment_id)
+def _compute_loyalty(db: QADatabase, fragment_id: str, topic_id: str,
+                     frag_helps: dict = None, topic_helps: dict = None) -> float:
+    """How well does fragment P align with its current topic?
+    Accepts pre-loaded frag_helps and topic_helps for batch efficiency."""
+    # Use pre-loaded data if available
+    if frag_helps is not None:
+        p_helped_set = frag_helps.get(fragment_id, set())
+    else:
+        p_rows = db.conn.execute(
+            "SELECT DISTINCT helped_qa_id FROM fragment_help_map WHERE fragment_id=?",
+            (fragment_id,)
+        ).fetchall()
+        p_helped_set = {r["helped_qa_id"] for r in p_rows}
+    p_helped = len(p_helped_set)
     if p_helped == 0:
         return 0.5
-    topic_helped = db.get_topic_helped_questions(topic_id)
+
+    if topic_helps is not None:
+        topic_helped = topic_helps.get(topic_id, set())
+    else:
+        topic_helped = db.get_topic_helped_questions(topic_id)
     if not topic_helped:
         return 0.5
-    p_rows = db.conn.execute(
-        "SELECT DISTINCT helped_qa_id FROM fragment_help_map WHERE fragment_id=?",
-        (fragment_id,)
-    ).fetchall()
-    p_helped_set = {r["helped_qa_id"] for r in p_rows}
-    overlap = len(p_helped_set & topic_helped)
-    return overlap / max(p_helped, 1)
+
+    return len(p_helped_set & topic_helped) / max(p_helped, 1)
 
 
-def _compute_affinity(db: QADatabase, fragment_id: str, topic_id: str) -> float:
-    """How well does fragment P match a different topic?"""
-    p_helped = db.get_fragment_help_count(fragment_id)
+def _compute_affinity(db: QADatabase, fragment_id: str, topic_id: str,
+                      frag_helps: dict = None, topic_helps: dict = None) -> float:
+    """How well does fragment P match a different topic?
+    Accepts pre-loaded frag_helps and topic_helps for batch efficiency."""
+    if frag_helps is not None:
+        p_helped_set = frag_helps.get(fragment_id, set())
+    else:
+        p_rows = db.conn.execute(
+            "SELECT DISTINCT helped_qa_id FROM fragment_help_map WHERE fragment_id=?",
+            (fragment_id,)
+        ).fetchall()
+        p_helped_set = {r["helped_qa_id"] for r in p_rows}
+    p_helped = len(p_helped_set)
     if p_helped == 0:
         return 0.0
-    topic_helped = db.get_topic_helped_questions(topic_id)
+
+    if topic_helps is not None:
+        topic_helped = topic_helps.get(topic_id, set())
+    else:
+        topic_helped = db.get_topic_helped_questions(topic_id)
     if not topic_helped:
         return 0.0
-    p_rows = db.conn.execute(
-        "SELECT DISTINCT helped_qa_id FROM fragment_help_map WHERE fragment_id=?",
-        (fragment_id,)
-    ).fetchall()
-    p_helped_set = {r["helped_qa_id"] for r in p_rows}
-    overlap = len(p_helped_set & topic_helped)
-    return overlap / max(min(p_helped, len(topic_helped)), 1)
+
+    return len(p_helped_set & topic_helped) / max(min(p_helped, len(topic_helped)), 1)
 
 
 def _get_migration_threshold(total_help_entries: int) -> float:
@@ -574,6 +593,17 @@ def _run_migration_cycle(db: QADatabase, debug_cb=None) -> int:
         return 0
 
     threshold = _get_migration_threshold(total_help)
+
+    # Pre-load all fragment help data (one query, avoids O(fragments × topics) queries)
+    all_help_rows = db.conn.execute(
+        "SELECT fragment_id, helped_qa_id FROM fragment_help_map"
+    ).fetchall()
+    frag_helps = {}
+    topic_helps = {}
+    for r in all_help_rows:
+        frag_helps.setdefault(r["fragment_id"], set()).add(r["helped_qa_id"])
+
+    # Pre-load topic help sets
     rows = db.conn.execute(
         """SELECT fm.fragment_id, fm.topic_id as current_topic
            FROM fragment_membership fm
@@ -582,18 +612,20 @@ def _run_migration_cycle(db: QADatabase, debug_cb=None) -> int:
     all_topics = [r["topic_id"] for r in db.conn.execute(
         "SELECT topic_id FROM dynamic_topics"
     ).fetchall()]
+    for topic_id in all_topics:
+        topic_helps[topic_id] = db.get_topic_helped_questions(topic_id)
 
     migration_candidates = {}
     for row in rows:
         fid = row["fragment_id"]
         current = row["current_topic"]
-        loyalty = _compute_loyalty(db, fid, current)
+        loyalty = _compute_loyalty(db, fid, current, frag_helps, topic_helps)
         best_affinity = 0.0
         best_topic = None
         for topic_id in all_topics:
             if topic_id == current:
                 continue
-            aff = _compute_affinity(db, fid, topic_id)
+            aff = _compute_affinity(db, fid, topic_id, frag_helps, topic_helps)
             if aff > best_affinity:
                 best_affinity = aff
                 best_topic = topic_id
@@ -682,15 +714,48 @@ def _update_topic_stats(db: QADatabase, debug_cb=None) -> int:
 
 
 def run_phase2_cycle(db_path: str, debug_cb=None) -> dict:
-    """Run Phase 2 self-organization: migration + topic stats."""
+    """Run Phase 2 self-organization: migration + topic stats + evolution."""
     db = QADatabase(db_path)
     try:
         migrated = _run_migration_cycle(db, debug_cb)
         updated = _update_topic_stats(db, debug_cb)
-        # Phase 3: Topic evolution
-        splits = _detect_topic_splits(db, debug_cb)
-        merges = _detect_topic_merges(db, debug_cb)
-        dissolved = _process_dissolved_topics(db, debug_cb)
+
+        # Phase 3: Topic evolution — only when help data has grown
+        total_help = db.conn.execute(
+            "SELECT COUNT(*) as cnt FROM fragment_help_map"
+        ).fetchone()["cnt"]
+
+        # Cooldown: only run evolution when help data has grown since last check
+        prev_help = db.conn.execute(
+            "SELECT COALESCE(MAX(qa_count_at_run), 0) as cnt FROM analysis_checkpoints "
+            "WHERE task_name='phase3_evolution'"
+        ).fetchone()["cnt"]
+
+        splits = merges = dissolved = 0
+        if total_help > prev_help + 20:  # at least 20 new help entries
+            try:
+                splits = _detect_topic_splits(db, debug_cb)
+            except Exception as e:
+                if debug_cb:
+                    debug_cb(f"  Split detection failed: {e}")
+            try:
+                merges = _detect_topic_merges(db, debug_cb)
+            except Exception as e:
+                if debug_cb:
+                    debug_cb(f"  Merge detection failed: {e}")
+            try:
+                dissolved = _process_dissolved_topics(db, debug_cb)
+            except Exception as e:
+                if debug_cb:
+                    debug_cb(f"  Dissolve processing failed: {e}")
+            # Record checkpoint
+            db.conn.execute(
+                """INSERT OR REPLACE INTO analysis_checkpoints (task_name, qa_count_at_run, status)
+                   VALUES ('phase3_evolution', ?, 'completed')""",
+                (total_help,),
+            )
+            db.conn.commit()
+
         return {"migrated": migrated, "topics_updated": updated,
                 "splits": splits, "merges": merges, "dissolved": dissolved}
     finally:
@@ -716,22 +781,24 @@ def _detect_topic_splits(db: QADatabase, debug_cb=None) -> int:
         if len(frags) < 6:
             continue
 
-        # Build pairwise behavioral similarity matrix for fragments in this topic
+        # Batch-load all fragment help data for this topic (one query, not O(n²))
+        placeholders = ",".join("?" * len(frags))
+        help_rows = db.conn.execute(
+            f"SELECT fragment_id, helped_qa_id FROM fragment_help_map "
+            f"WHERE fragment_id IN ({placeholders})",
+            frags
+        ).fetchall()
+        frag_helps = {}
+        for r in help_rows:
+            frag_helps.setdefault(r["fragment_id"], set()).add(r["helped_qa_id"])
+
+        # Build pairwise behavioral similarity matrix
         n = len(frags)
         sim_matrix = {}
         for i in range(n):
             for j in range(i + 1, n):
-                fi, fj = frags[i], frags[j]
-                fi_rows = db.conn.execute(
-                    "SELECT DISTINCT helped_qa_id FROM fragment_help_map WHERE fragment_id=?",
-                    (fi,)
-                ).fetchall()
-                fj_rows = db.conn.execute(
-                    "SELECT DISTINCT helped_qa_id FROM fragment_help_map WHERE fragment_id=?",
-                    (fj,)
-                ).fetchall()
-                fi_set = {r["helped_qa_id"] for r in fi_rows}
-                fj_set = {r["helped_qa_id"] for r in fj_rows}
+                fi_set = frag_helps.get(frags[i], set())
+                fj_set = frag_helps.get(frags[j], set())
                 if fi_set and fj_set:
                     sim = len(fi_set & fj_set) / len(fi_set | fj_set)
                 else:

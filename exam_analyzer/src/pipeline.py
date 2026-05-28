@@ -592,9 +592,12 @@ def run_pipeline(
                 for idx in used_indices:
                     if isinstance(idx, (int, float)) and 1 <= int(idx) <= len(top_similar):
                         qa_ref = top_similar[int(idx) - 1]
-                        db.record_attempt(qa_ref["id"], success=True)
+                        if not qa_ref.get("_is_kp"):
+                            db.record_attempt(qa_ref["id"], success=True)
                         used_ids.add(qa_ref["id"])
                 for qa_ref in top_similar:
+                    if qa_ref.get("_is_kp"):
+                        continue  # KP entries are not QAs, skip weight recording
                     if qa_ref["id"] not in used_ids:
                         ref_topic = qa_ref.get("topic", "")
                         if ref_topic and step0_topic and ref_topic != step0_topic:
