@@ -221,6 +221,84 @@ def _extract_ms_fragments(answer_text: str, qa_id: int, client, debug: Callable)
     return fragments
 
 
+def _classify_qa_against_kps(qa_text: str, answer_text: str, kp_concepts: list[dict],
+                              client, debug: Callable) -> dict[str, float]:
+    """Layer 1: LLM judges QA relevance against all existing KPs.
+    Returns {kp_id: relevance_score [0,1]}."""
+    if not kp_concepts:
+        return {}
+
+    MAX_KPS = 50
+    if len(kp_concepts) > MAX_KPS:
+        # Keep top KPs by evidence_count (most validated)
+        kp_concepts = sorted(kp_concepts, key=lambda k: k.get("evidence", 0), reverse=True)[:MAX_KPS]
+
+    lang = detect_content_lang(qa_text + answer_text)
+    kp_list = "\n".join(f"[{k['id']}] {k['concept']}" for k in kp_concepts)
+
+    if lang == 'en':
+        sys = ("You are an exam curriculum expert. Judge whether each listed knowledge "
+               "point is tested by the given question. Score each KP. Output JSON.")
+        usr = (f"Question: {qa_text[:500]}\n\nAnswer: {answer_text[:500]}\n\n"
+               f"Knowledge Points:\n{kp_list}\n\n"
+               "For each KP, score:\n"
+               "1.0 = core focus — the question directly tests this KP\n"
+               "0.5 = indirectly involved — background knowledge helpful\n"
+               "0.0 = unrelated\n"
+               'Return JSON: {"kp_scores": {"kp_id": 1.0, ...}}')
+    else:
+        sys = ("你是一个考试课程专家。判断每个知识点是否被给定的题目考察。逐项评分。Output JSON。")
+        usr = (f"题目: {qa_text[:500]}\n\n答案: {answer_text[:500]}\n\n"
+               f"知识点:\n{kp_list}\n\n"
+               "对每个KPi评分:\n"
+               "1.0 = 核心考察\n0.5 = 间接涉及\n0.0 = 无关\n"
+               '返回 JSON: {"kp_scores": {"kp_id": 1.0, ...}}')
+
+    messages = [{"role": "system", "content": sys}, {"role": "user", "content": usr}]
+    try:
+        result = call_flash(client, messages, max_retries=1, debug_callback=debug)
+        scores = result.get("kp_scores", {}) if isinstance(result, dict) else {}
+    except Exception as e:
+        debug(f"  KP classification failed for QA: {e}")
+        scores = {}
+
+    return {k: float(v) for k, v in scores.items() if isinstance(v, (int, float))}
+
+
+def _place_qa_vector_from_kp_scores(db: QADatabase, qa_id: int,
+                                      kp_scores: dict[str, float], debug: Callable):
+    """Place a new QA's initial vector based on LLM KP relevance scores."""
+    if not kp_scores:
+        return
+
+    # Store QA-KP relevance scores
+    for kp_id, score in kp_scores.items():
+        if score >= 0.3:
+            db.upsert_qa_kp_score(qa_id, kp_id, round(score, 3))
+
+    # Determine initial Topic and centrality
+    best_kp = max(kp_scores, key=kp_scores.get)
+    best_score = kp_scores[best_kp]
+    kp_data = db.get_kp_by_id(best_kp)
+    topic = kp_data.get("name", "") if kp_data else ""
+
+    centrality = 0.8 if best_score >= 0.8 else (0.5 if best_score >= 0.5 else 0.2)
+
+    # Update QA's topic and centrality
+    if topic:
+        db.conn.execute("UPDATE qa_pairs SET topic=? WHERE id=?", (topic, qa_id))
+    db.conn.commit()
+
+    # Initialize fragment centrality for this QA's fragments
+    frag_rows = db.conn.execute(
+        "SELECT point_id FROM ms_fragments WHERE qa_id=?", (qa_id,)
+    ).fetchall()
+    for fr in frag_rows:
+        db.upsert_fragment_centrality(fr["point_id"], centrality, best_score, 0.5, 0.0)
+
+    debug(f"  QA {qa_id}: Topic='{topic}', centrality={centrality}, best_kp={best_kp}({best_score})")
+
+
 # -- Round 1: Answer with past QAs (Pro) --
 
 def _build_answer_prompt(question_text: str, similar_qas: list[dict]) -> list:
@@ -670,7 +748,7 @@ def run_pipeline(
                                          missed_text="\n".join(missed_texts) if missed_texts else "",
                                          miss_categories=miss_cats_json)
 
-                # Phase 1: Extract MS fragments + record behavior help + assign topic
+                # Phase 5: Extract MS fragments + LLM KP classification + behavior recording
                 try:
                     fragments = _extract_ms_fragments(
                         qa.answer_text, qa_id, client, _debug)
@@ -683,6 +761,16 @@ def run_pipeline(
                             db.set_fragment_membership(
                                 frag["point_id"], topic_id, loyalty=0.5)
 
+                    # Layer 1: LLM KP classification (only when KPs exist, i.e. Phase 2+)
+                    kps = db.get_all_kps()
+                    if kps:
+                        kp_concepts = [{"id": k["id"], "concept": k.get("core_concept", k.get("name", "")),
+                                        "evidence": k.get("evidence_count", 0)} for k in kps]
+                        kp_scores = _classify_qa_against_kps(
+                            qa.question_text, qa.answer_text, kp_concepts, client, _debug)
+                        if kp_scores:
+                            _place_qa_vector_from_kp_scores(db, qa_id, kp_scores, _debug)
+
                     # Record behavior: fragments from used QAs helped this question
                     if used_ids:
                         for used_qa_id in used_ids:
@@ -694,8 +782,12 @@ def run_pipeline(
                             if frag_ids:
                                 help_effect = (len(covered) / max(
                                     len(covered) + len(missed_texts), 1))
-                                db.record_fragment_help_batch(
-                                    frag_ids, qa_id, round(help_effect, 3))
+                                # Determine help_level from grading result
+                                help_level = "direct" if help_effect >= 0.7 else (
+                                    "understanding" if help_effect >= 0.3 else "none")
+                                for fid in frag_ids:
+                                    db.record_fragment_help_with_level(
+                                        fid, qa_id, round(help_effect, 3), help_level)
                 except Exception as e:
                     _debug(f"  fragment extraction failed for Q{qn}: {e}")
 
