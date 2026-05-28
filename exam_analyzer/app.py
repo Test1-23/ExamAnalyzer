@@ -109,9 +109,9 @@ def _load_kp_from_db(db) -> list[dict]:
     try:
         # Phase 4: Dynamic_Topics first (behavior-validated KPs)
         dt_rows = db.conn.execute(
-            "SELECT name, kp_concept, kp_detail, mass, stability "
+            "SELECT name, kp_concept, kp_detail, mass "
             "FROM dynamic_topics WHERE quality='stable' AND kp_concept != '' "
-            "ORDER BY stability DESC, mass DESC"
+            "ORDER BY mass DESC"
         ).fetchall()
         for r in dt_rows:
             kps.append({
@@ -1035,14 +1035,12 @@ def knowledge_graph():
                 "dependents": [],
             })
 
-    edges = []
-    for pre, dep, rel_type, conf in db.conn.execute(
-        "SELECT prerequisite, dependent, relationship_type, confidence FROM topic_dependencies"
-    ).fetchall():
-        edges.append({
-            "source": pre, "target": dep,
-            "type": rel_type, "confidence": conf,
-        })
+    # Derive edges from already-loaded graph (avoid duplicate query)
+    for topic, info in graph.items():
+        for pre in info.get("prerequisites", []):
+            edges.append({"source": pre, "target": topic, "type": "prerequisite", "confidence": "medium"})
+        for dep in info.get("dependents", []):
+            edges.append({"source": topic, "target": dep, "type": "prerequisite", "confidence": "medium"})
 
     # Phase 4: Include Dynamic_Topics nodes and derived edges
     try:

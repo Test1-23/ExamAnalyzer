@@ -177,7 +177,6 @@ def generate_kps(db: QADatabase, clustering: dict, client, debug_cb=None) -> lis
 
     def _name_batch(batch_start, batch_clusters):
         batch_results = []
-        batch_centroids = centroids[batch_start:batch_start + batch_size]
         batch_cohesions = cohesions[batch_start:batch_start + batch_size]
         b = batch_start  # for kp_id calculation below
 

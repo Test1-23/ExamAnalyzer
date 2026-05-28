@@ -907,6 +907,16 @@ def _detect_topic_merges(db: QADatabase, debug_cb=None) -> int:
         return 0
 
     topic_ids = [t["topic_id"] for t in topics]
+
+    # Pre-load fragment help data for affinity computation
+    frag_helps = {}
+    help_rows = db.conn.execute(
+        "SELECT fragment_id, helped_qa_id FROM fragment_help_map"
+    ).fetchall()
+    for r in help_rows:
+        frag_helps.setdefault(r["fragment_id"], set()).add(r["helped_qa_id"])
+    topic_helps = {tid: db.get_topic_helped_questions(tid) for tid in topic_ids}
+
     merges = 0
     merged_set = set()
 
@@ -934,8 +944,10 @@ def _detect_topic_merges(db: QADatabase, debug_cb=None) -> int:
             # Bidirectional fragment affinity
             a_frags = db.get_topic_fragments(a)
             b_frags = db.get_topic_fragments(b)
-            a_aff = sum(_compute_affinity(db, fid, b) for fid in a_frags)
-            b_aff = sum(_compute_affinity(db, fid, a) for fid in b_frags)
+            a_aff = sum(_compute_affinity(db, fid, b, frag_helps, topic_helps)
+                        for fid in a_frags)
+            b_aff = sum(_compute_affinity(db, fid, a, frag_helps, topic_helps)
+                        for fid in b_frags)
             avg_a = a_aff / len(a_frags) if a_frags else 0
             avg_b = b_aff / len(b_frags) if b_frags else 0
 

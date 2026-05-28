@@ -872,6 +872,8 @@ def run_pipeline(
         for kp in kps:
             if kp.get("evidence_count", 0) >= 6:
                 auto_split_kp(db, kp["id"], client, debug_cb=_debug)
+        # Re-fetch: auto_split may have created new KPs
+        kps = db.get_all_kps()
         all_kp_ids = [k["id"] for k in kps]
         if len(all_kp_ids) >= 2:
             consistency = cross_kp_consistency(db, all_kp_ids[:30], client, debug_cb=_debug)
