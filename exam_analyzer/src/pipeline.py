@@ -837,6 +837,8 @@ def run_pipeline(
             )[:10000] or "; No knowledge points extracted."
 
     # Mark representative and cross-topic QAs
+    # Re-fetch groups after topic merge may have modified topic assignments
+    groups = db.get_topic_groups()
     weights = db.get_all_weights()
     for topic, qas in groups.items():
         if not topic or topic == "(uncategorized)" or not qas:
