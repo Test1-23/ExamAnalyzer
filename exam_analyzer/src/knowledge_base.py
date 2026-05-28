@@ -340,6 +340,7 @@ class QADatabase:
                 fragment_id TEXT REFERENCES ms_fragments(point_id),
                 helped_qa_id INTEGER REFERENCES qa_pairs(id),
                 help_effect REAL DEFAULT 0,
+                help_level TEXT DEFAULT '',
                 PRIMARY KEY (fragment_id, helped_qa_id)
             );
 
@@ -366,6 +367,40 @@ class QADatabase:
                 kp_detail TEXT DEFAULT '',
                 created_at TEXT DEFAULT (datetime('now')),
                 last_evolved_at TEXT
+            );
+
+            -- Phase 5: LLM-driven vector space infrastructure
+            CREATE TABLE IF NOT EXISTS fragment_centrality (
+                fragment_id TEXT PRIMARY KEY REFERENCES ms_fragments(point_id),
+                verification_count INTEGER DEFAULT 0,
+                avg_help_score REAL DEFAULT 0,
+                topic_coherence REAL DEFAULT 0,
+                variance REAL DEFAULT 0,
+                centrality_score REAL DEFAULT 0.2,
+                updated_at TEXT DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS kp_vectors (
+                kp_id TEXT PRIMARY KEY REFERENCES knowledge_points(id),
+                vector BLOB NOT NULL,
+                adjustment_count INTEGER DEFAULT 0,
+                stability REAL DEFAULT 1.0,
+                updated_at TEXT DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS qa_kp_scores (
+                qa_id INTEGER REFERENCES qa_pairs(id),
+                kp_id TEXT REFERENCES knowledge_points(id),
+                relevance_score REAL NOT NULL,
+                created_at TEXT DEFAULT (datetime('now')),
+                PRIMARY KEY (qa_id, kp_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS topic_vectors (
+                topic_id TEXT PRIMARY KEY REFERENCES dynamic_topics(topic_id),
+                vector BLOB NOT NULL,
+                member_kp_count INTEGER DEFAULT 0,
+                updated_at TEXT DEFAULT (datetime('now'))
             );
         """)
         self.conn.execute(
@@ -406,6 +441,9 @@ class QADatabase:
             ]),
             (2, "question_feedback metadata", [
                 "ALTER TABLE question_feedback ADD COLUMN miss_categories TEXT DEFAULT ''",
+            ]),
+            (3, "Phase 5: fragment_help_map help_level + vector infrastructure", [
+                "ALTER TABLE fragment_help_map ADD COLUMN help_level TEXT DEFAULT ''",
             ]),
         ]
 
@@ -780,6 +818,101 @@ class QADatabase:
             (topic_id,),
         ).fetchall()
         return {r["helped_qa_id"] for r in rows}
+
+    # ============================================================
+    # Phase 5: Fragment centrality + vector infrastructure
+    # ============================================================
+
+    def upsert_fragment_centrality(self, fragment_id: str, centrality_score: float,
+                                    avg_help_score: float = 0.0, topic_coherence: float = 0.0,
+                                    variance: float = 0.0):
+        with self._write_lock:
+            self.conn.execute(
+                """INSERT OR REPLACE INTO fragment_centrality
+                   (fragment_id, verification_count, avg_help_score, topic_coherence,
+                    variance, centrality_score, updated_at)
+                   VALUES (?, COALESCE((SELECT verification_count FROM fragment_centrality
+                    WHERE fragment_id=?), 0) + 1, ?, ?, ?, ?, datetime('now'))""",
+                (fragment_id, fragment_id, avg_help_score, topic_coherence, variance, centrality_score),
+            )
+            self.conn.commit()
+
+    def get_fragment_centrality(self, fragment_id: str) -> dict | None:
+        row = self.conn.execute(
+            "SELECT * FROM fragment_centrality WHERE fragment_id=?", (fragment_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    def get_topic_fragment_centralities(self, topic_id: str) -> list[dict]:
+        rows = self.conn.execute(
+            """SELECT fc.* FROM fragment_centrality fc
+               JOIN fragment_membership fm ON fc.fragment_id = fm.fragment_id
+               WHERE fm.topic_id = ?""", (topic_id,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def upsert_kp_vector(self, kp_id: str, vector: np.ndarray):
+        with self._write_lock:
+            self.conn.execute(
+                """INSERT OR REPLACE INTO kp_vectors
+                   (kp_id, vector, adjustment_count, updated_at)
+                   VALUES (?, ?, COALESCE((SELECT adjustment_count FROM kp_vectors
+                    WHERE kp_id=?), 0) + 1, datetime('now'))""",
+                (kp_id, vector.tobytes(), kp_id),
+            )
+            self.conn.commit()
+
+    def get_kp_vector(self, kp_id: str) -> np.ndarray | None:
+        row = self.conn.execute(
+            "SELECT vector FROM kp_vectors WHERE kp_id=?", (kp_id,)
+        ).fetchone()
+        return np.frombuffer(row["vector"]) if row else None
+
+    def get_all_kp_vectors(self) -> dict[str, np.ndarray]:
+        rows = self.conn.execute("SELECT kp_id, vector FROM kp_vectors").fetchall()
+        return {r["kp_id"]: np.frombuffer(r["vector"]) for r in rows}
+
+    def upsert_qa_kp_score(self, qa_id: int, kp_id: str, relevance_score: float):
+        with self._write_lock:
+            self.conn.execute(
+                """INSERT OR REPLACE INTO qa_kp_scores (qa_id, kp_id, relevance_score)
+                   VALUES (?, ?, ?)""",
+                (qa_id, kp_id, relevance_score),
+            )
+            self.conn.commit()
+
+    def get_qa_kp_scores(self, qa_id: int) -> dict[str, float]:
+        rows = self.conn.execute(
+            "SELECT kp_id, relevance_score FROM qa_kp_scores WHERE qa_id=?", (qa_id,)
+        ).fetchall()
+        return {r["kp_id"]: r["relevance_score"] for r in rows}
+
+    def upsert_topic_vector(self, topic_id: str, vector: np.ndarray, member_count: int = 0):
+        with self._write_lock:
+            self.conn.execute(
+                """INSERT OR REPLACE INTO topic_vectors
+                   (topic_id, vector, member_kp_count, updated_at)
+                   VALUES (?, ?, ?, datetime('now'))""",
+                (topic_id, vector.tobytes(), member_count),
+            )
+            self.conn.commit()
+
+    def get_topic_vector(self, topic_id: str) -> np.ndarray | None:
+        row = self.conn.execute(
+            "SELECT vector FROM topic_vectors WHERE topic_id=?", (topic_id,)
+        ).fetchone()
+        return np.frombuffer(row["vector"]) if row else None
+
+    def record_fragment_help_with_level(self, fragment_id: str, helped_qa_id: int,
+                                         help_effect: float = 0.0, help_level: str = ""):
+        with self._write_lock:
+            self.conn.execute(
+                """INSERT OR REPLACE INTO fragment_help_map
+                   (fragment_id, helped_qa_id, help_effect, help_level)
+                   VALUES (?, ?, ?, ?)""",
+                (fragment_id, helped_qa_id, help_effect, help_level),
+            )
+            self.conn.commit()
 
     def upsert_topic_link(self, src_topic: str, dst_topic: str, count: int = 1):
         """Persist a cross-topic QA reference for See also generation."""
