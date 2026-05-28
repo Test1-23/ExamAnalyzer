@@ -82,7 +82,8 @@ if kps:
         q = generate_variation(tmpl, 'intermediate')
         ans = generate_answer(q, kps[0]['id'], db, client, lambda m: print(m))
         print(f'Generated: {q[:100]}')
-        print(f'Answer: {ans.get("answer", "")[:100]}')
+        answer_text = ans.get("answer", "")
+        print(f'Answer: {answer_text[:100].encode("ascii", errors="replace").decode("ascii")}')
         print(f'Validated: {ans.get("validated")}')
     else:
         print('No template extracted (may be normal)')
