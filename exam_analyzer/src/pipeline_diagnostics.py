@@ -1133,29 +1133,43 @@ def _compute_eigenvector_centrality(adj_matrix: np.ndarray, max_iter: int = 50) 
 def _adjust_vectors_from_feedback(db: QADatabase, debug_cb=None) -> dict:
     """Three-layer cascade: adjust Fragment→KP→Topic vectors from LLM feedback."""
     result = {"fragments_adjusted": 0, "kps_adjusted": 0, "topics_adjusted": 0}
-    learning_rate = 0.01
 
     # Layer 1: Adjust fragment centrality from LLM help data
+    # Batch-read per topic via get_topic_fragment_centralities (avoid N+1 SELECTs)
     topics = db.conn.execute(
         "SELECT topic_id FROM dynamic_topics WHERE quality != 'dissolved'"
     ).fetchall()
+    centrality_updates = []
     for t in topics:
-        topic_id = t["topic_id"]
-        frags = db.get_topic_fragments(topic_id)
-        for fid in frags:
-            cent = db.get_fragment_centrality(fid)
-            if not cent or cent["verification_count"] < 1:
+        cent_rows = db.get_topic_fragment_centralities(t["topic_id"])
+        for cent in cent_rows:
+            if cent["verification_count"] < 1:
                 continue
-            # Update centrality using accumulated verification data
-            # Higher help_score → stronger centrality boost
             cohesion = cent.get("topic_coherence", 0.5)
-            new_centrality = (0.7 * cent["centrality_score"]
-                              + learning_rate * cent["avg_help_score"]
-                              + 0.1 * cohesion)
-            db.upsert_fragment_centrality(
-                fid, round(min(1.0, new_centrality), 3),
-                cent["avg_help_score"], cohesion, cent.get("variance", 0))
+            # EMA: 60% carry-over + 30% help performance + 10% coherence
+            new_centrality = (0.60 * cent["centrality_score"]
+                              + 0.30 * cent["avg_help_score"]
+                              + 0.10 * cohesion)
+            centrality_updates.append((
+                cent["fragment_id"],
+                round(min(1.0, new_centrality), 3),
+                cent["avg_help_score"],
+                cohesion,
+                cent.get("variance", 0),
+            ))
             result["fragments_adjusted"] += 1
+
+    if centrality_updates:
+        with db._write_lock:
+            db.conn.executemany(
+                """INSERT OR REPLACE INTO fragment_centrality
+                   (fragment_id, verification_count, avg_help_score, topic_coherence,
+                    variance, centrality_score, updated_at)
+                   VALUES (?, COALESCE((SELECT verification_count FROM fragment_centrality
+                    WHERE fragment_id=?), 0) + 1, ?, ?, ?, ?, datetime('now'))""",
+                [(fid, fid, ahs, tc, var, cs) for fid, cs, ahs, tc, var in centrality_updates],
+            )
+            db.conn.commit()
 
     # Layer 2: KP vectors (cascade from member QA embeddings)
     kp_rows = db.conn.execute(
