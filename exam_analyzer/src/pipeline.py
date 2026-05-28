@@ -557,6 +557,21 @@ def run_pipeline(
                     reverse=True,
                 )[:4]
 
+                # Phase 3: Include stable KP text as additional reference material
+                stable_kps = db.get_stable_topics()
+                kp_refs = []
+                if stable_kps:
+                    for kp in stable_kps[:3]:
+                        kp_refs.append({
+                            "id": -1,
+                            "question_text": f"[KP] {kp['kp_concept']}",
+                            "answer_text": kp["kp_detail"] or kp["kp_concept"],
+                            "topic": kp.get("name", ""),
+                            "_score": kp.get("stability", 0.8),
+                            "_is_kp": True,
+                        })
+                    top_similar = top_similar[:4] + kp_refs
+
                 # Round 1: Flash answers (cheaper than Pro, richer miss signal for difficulty)
                 t0 = time.time()
                 r1_ok = True
