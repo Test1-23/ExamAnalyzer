@@ -175,6 +175,26 @@ exam_analyzer/
   Topic 分裂/合并/消解 → KP 混入检索池 → 持续演化
 ```
 
+### LLM 驱动的三层向量空间 (Phase 5)
+
+```
+Layer 1: LLM 结构化分类器
+  新 QA → LLM 判断与所有 KP 的相关性 [0,1]
+  → QA 初始向量 = 高分 KP 向量的加权平均
+  → 解决: 新 QA 首次检索就精准命中相关 Topic
+
+Layer 2: 双通道检索
+  通道 A (语义): embedding top-30, 高召回
+  通道 B (结构): Topic 归属 + 行为图漫步, 高精度
+  融合排序 → 检索不依赖单一 embedding 信号
+
+Layer 3: 向量空间自组织
+  Fragment 中心性: 核心 Fragment 主导向量调整
+  图中心性质心: Eigenvector Centrality + Weiszfeld 几何中位数
+  三层级联: Fragment 调整 → KP 质心 → Topic 质心
+  → 异常值不影响主聚类
+```
+
 ### 聊天助手 (5-agent)
 
 ```
@@ -187,12 +207,13 @@ exam_analyzer/
   → 学生记忆记录 + 对话历史持久化
 ```
 
-### 数据库表 (31 张)
+### 数据库表 (35 张)
 
 | 分组 | 表 |
 |------|----|
 | 核心存储 (6) | `qa_pairs`, `question_feedback`, `topic_links`, `exam_sessions`, `api_call_log`, `chat_history` |
 | 行为驱动知识图谱 (4) | `ms_fragments`, `fragment_help_map`, `fragment_membership`, `dynamic_topics` |
+| 向量空间基础设施 (4) | `fragment_centrality`, `kp_vectors`, `qa_kp_scores`, `topic_vectors` |
 | 分析产出 (7) | `topic_dependencies`, `command_verb_patterns`, `topic_difficulty`, `knowledge_points`, `kp_edges`, `qa_kp_membership`, `exam_trends` |
 | 学生模型 (4) | `student_memory`, `student_knowledge_state`, `confusion_events`, `student_trajectory` |
 | 自适应与进化 (6) | `paper_signatures`, `dimension_baselines`, `diversity_signals`, `calibration_checks`, `correction_rules`, `evolution_history` |
@@ -206,6 +227,10 @@ exam_analyzer/
 - **KP 是 Topic 的投影**：Topic 稳定后才由 Flash 生成命名和解释，Topic 变化后重新生成
 - **质量由实测驱动**：KP 的有效性由 Phase 2 答题得分验证，非 Flash 自我评价
 - **对抗精炼已退役**：Flash 审查 Flash 被行为驱动的质量度量替代
+- **LLM 作为结构化分类器**：新 QA 由 LLM 判断与所有 KP 的相关性（1 次调用/QA，分类非生成）
+- **双通道检索**：embedding 通道（召回）+ Topic 结构通道（精度）+ 行为图漫步
+- **Fragment 中心性 + 图中心性质心**：核心 Fragment 主导向量调整，孤立点被忽略
+- **三层级联向量调整**：Fragment → KP → Topic 级联自组织
 - **Wilson 区间 Beta 权重**：精确下置信界估计，小样本更保守
 - **增量蒸馏缓存**：MD5 指纹比对，仅重蒸变化的 Topic
 - **双语 prompt**：`detect_content_lang()` 自动中英文切换
