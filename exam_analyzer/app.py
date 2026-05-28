@@ -104,9 +104,28 @@ def _get_chat_retriever():
 
 
 def _load_kp_from_db(db) -> list[dict]:
-    """Read KP-like structured data directly from DB (representative QAs per topic).
-    More reliable than parsing points.txt."""
+    """Read KP data from DB: Dynamic_Topics (priority) + qa_pairs (fallback)."""
     kps = []
+    try:
+        # Phase 4: Dynamic_Topics first (behavior-validated KPs)
+        dt_rows = db.conn.execute(
+            "SELECT name, kp_concept, kp_detail, mass, stability "
+            "FROM dynamic_topics WHERE quality='stable' AND kp_concept != '' "
+            "ORDER BY stability DESC, mass DESC"
+        ).fetchall()
+        for r in dt_rows:
+            kps.append({
+                "topic": r["name"] or "Topic",
+                "concept": r["kp_concept"],
+                "detail": r["kp_detail"],
+                "pitfall": "",
+                "scoring": "",
+                "source": "dynamic_topic",
+            })
+    except Exception:
+        pass
+
+    # Fallback: qa_pairs representative QAs (legacy)
     try:
         rows = db.conn.execute("""
             SELECT topic, knowledge_summary, question_text, answer_text,
@@ -115,7 +134,7 @@ def _load_kp_from_db(db) -> list[dict]:
             WHERE topic != '' AND topic != '(uncategorized)'
             ORDER BY is_representative DESC, success_count DESC
         """).fetchall()
-        seen_topics = set()
+        seen_topics = {k["topic"] for k in kps}
         for r in rows:
             topic = r["topic"]
             if topic in seen_topics:
@@ -128,6 +147,7 @@ def _load_kp_from_db(db) -> list[dict]:
                 "pitfall": "",
                 "scoring": "",
                 "difficulty": r["difficulty_estimate"] or "",
+                "source": "qa_pairs",
             })
     except Exception:
         pass
@@ -1023,6 +1043,44 @@ def knowledge_graph():
             "source": pre, "target": dep,
             "type": rel_type, "confidence": conf,
         })
+
+    # Phase 4: Include Dynamic_Topics nodes and derived edges
+    try:
+        dt_rows = db.conn.execute(
+            "SELECT topic_id, name, kp_concept, kp_detail, mass, stability, quality, "
+            "parent_topic, child_topics, merged_from "
+            "FROM dynamic_topics WHERE quality IN ('stable', 'forming')"
+        ).fetchall()
+        for r in dt_rows:
+            nodes.append({
+                "name": r["name"] or r["topic_id"],
+                "qa_count": r["mass"] or 0,
+                "difficulty": "",
+                "prerequisites": [],
+                "dependents": [],
+                "source": "dynamic_topic",
+                "stability": r["stability"],
+            })
+            # Derive edges from parent/child relationships
+            if r["parent_topic"]:
+                edges.append({
+                    "source": r["parent_topic"], "target": r["name"] or r["topic_id"],
+                    "type": "parent_of", "confidence": "medium",
+                })
+            child_topics = json.loads(r["child_topics"] or "[]")
+            for child in child_topics:
+                edges.append({
+                    "source": r["name"] or r["topic_id"], "target": child,
+                    "type": "split_into", "confidence": "medium",
+                })
+            merged = json.loads(r["merged_from"] or "[]")
+            for src in merged:
+                edges.append({
+                    "source": src, "target": r["name"] or r["topic_id"],
+                    "type": "merged_from", "confidence": "medium",
+                })
+    except Exception:
+        pass
 
     return jsonify({"nodes": nodes, "edges": edges})
 

@@ -864,27 +864,23 @@ def run_pipeline(
     except Exception as e:
         _log_stage_error("Knowledge graph", _debug, e)
 
-    # -- Adversarial refinement: challenger/defender debate on KP quality --
+    # -- KP structural refinement: auto-split + auto-merge (behavior-driven) --
     try:
-        from .adversarial_refiner import run_adversarial_refinement, auto_split_kp, auto_merge_kps
-        _debug("Running adversarial refinement on KPs...")
-        run_adversarial_refinement(db_path, api_url, api_key,
-                                   debug_callback=_debug)
-        # Auto-split over-broad KPs
+        from .adversarial_refiner import auto_split_kp, auto_merge_kps, cross_kp_consistency
+        _debug("Running KP structural refinement (split/merge)...")
         kps = db.get_all_kps()
         for kp in kps:
             if kp.get("evidence_count", 0) >= 6:
                 auto_split_kp(db, kp["id"], client, debug_cb=_debug)
-        # Auto-merge KPs flagged by cross-consistency
-        from .adversarial_refiner import cross_kp_consistency
-        all_kp_ids = [k["id"] for k in db.get_all_kps()]
+        all_kp_ids = [k["id"] for k in kps]
         if len(all_kp_ids) >= 2:
             consistency = cross_kp_consistency(db, all_kp_ids[:30], client, debug_cb=_debug)
             merged_count = auto_merge_kps(db, consistency.get("issues", []), debug_cb=_debug)
             if merged_count:
                 _debug(f"Auto-merge: {merged_count} KP pairs merged")
+        _debug("Adversarial refinement (Flash-vs-Flash) retired — replaced by behavior-driven quality")
     except Exception as e:
-        _log_stage_error("Adversarial refinement", _debug, e)
+        _log_stage_error("KP structural refinement", _debug, e)
 
     # -- Offline analysis (command verbs, difficulty, dependencies) --
     try:
