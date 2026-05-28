@@ -1010,6 +1010,7 @@ def knowledge_graph():
     difficulties = {d["topic"]: d for d in db.get_topic_difficulty()}
 
     nodes = []
+    edges = []
     added = set()
     for topic, info in graph.items():
         if topic in added:
@@ -1038,9 +1039,11 @@ def knowledge_graph():
     # Derive edges from already-loaded graph (avoid duplicate query)
     for topic, info in graph.items():
         for pre in info.get("prerequisites", []):
-            edges.append({"source": pre, "target": topic, "type": "prerequisite", "confidence": "medium"})
+            pre_name = pre["topic"] if isinstance(pre, dict) else pre
+            edges.append({"source": pre_name, "target": topic, "type": "prerequisite", "confidence": "medium"})
         for dep in info.get("dependents", []):
-            edges.append({"source": topic, "target": dep, "type": "prerequisite", "confidence": "medium"})
+            dep_name = dep["topic"] if isinstance(dep, dict) else dep
+            edges.append({"source": topic, "target": dep_name, "type": "prerequisite", "confidence": "medium"})
 
     # Phase 4: Include Dynamic_Topics nodes and derived edges
     try:

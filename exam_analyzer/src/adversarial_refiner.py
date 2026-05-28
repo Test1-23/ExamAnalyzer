@@ -241,11 +241,11 @@ def cross_kp_consistency(db: QADatabase, kp_ids: list[str], client, debug_cb=Non
         if lang == 'en':
             sys = "Check these knowledge points for cross-KP consistency issues. Output JSON."
             usr = f"{kp_texts}\nCheck: duplicates, contradictions, merges, dependency direction.\n" \
-                  'Return: {"issues": [{"kp_a": "id1", "kp_b": "id2", "issue": "...", "suggestion": "..."}]}'
+                  'Return: {"issues": [{"kp_a":"id1","kp_b":"id2","issue":"...","suggestion":"...","action":"merge|split|no_change"}]}'
         else:
             sys = "检查这些知识点之间的跨KP一致性问题。Output JSON。"
             usr = f"{kp_texts}\n检查: 重复/矛盾/应合并/依赖方向不一致\n" \
-                  '返回: {"issues": [{"kp_a": "id1", "kp_b": "id2", "issue": "...", "suggestion": "..."}]}'
+                  '返回: {"issues": [{"kp_a":"id1","kp_b":"id2","issue":"...","suggestion":"...","action":"merge|split|no_change"}]}'
 
         messages = [{"role": "system", "content": sys}, {"role": "user", "content": usr}]
         try:
@@ -454,9 +454,15 @@ def auto_merge_kps(db: QADatabase, issues: list[dict], debug_cb=None) -> int:
     """Merge KPs flagged by cross_kp_consistency. Returns number merged."""
     merged = 0
     for issue in issues:
-        suggestion = (issue.get("suggestion", "") or "").lower()
-        if "merge" not in suggestion:
-            continue
+        action = issue.get("action", "")
+        if action:
+            if action != "merge":
+                continue
+        else:
+            # Fallback: keyword match on suggestion text (backward compat)
+            suggestion = (issue.get("suggestion", "") or "").lower()
+            if "merge" not in suggestion:
+                continue
 
         kp_a = issue.get("kp_a", "")
         kp_b = issue.get("kp_b", "")

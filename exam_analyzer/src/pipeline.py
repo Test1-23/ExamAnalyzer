@@ -27,12 +27,6 @@ from .embedding_cluster import detect_content_lang, TOPIC_EMBED_MODEL
 # Unified error handling
 # ============================================================
 
-class PipelineError(Exception):
-    """Pipeline error with severity: fatal | recoverable | degraded."""
-    def __init__(self, message: str, severity: str = "recoverable"):
-        super().__init__(message)
-        self.severity = severity
-
 
 def _log_stage_error(stage: str, debug: callable, exc: Exception):
     """Standardized error logging for any pipeline stage."""
@@ -290,8 +284,9 @@ def _place_qa_vector_from_kp_scores(db: QADatabase, qa_id: int,
 
     # Update QA's topic and centrality
     if topic:
-        db.conn.execute("UPDATE qa_pairs SET topic=? WHERE id=?", (topic, qa_id))
-    db.conn.commit()
+        db.update_qa_topic(qa_id, topic)
+    else:
+        return
 
     # Initialize fragment centrality for this QA's fragments
     frag_rows = db.conn.execute(
@@ -979,7 +974,7 @@ def run_pipeline(
             merged_count = auto_merge_kps(db, consistency.get("issues", []), debug_cb=_debug)
             if merged_count:
                 _debug(f"Auto-merge: {merged_count} KP pairs merged")
-        _debug("Adversarial refinement (Flash-vs-Flash) retired — replaced by behavior-driven quality")
+        _debug("KP structural refinement complete (behavior-driven split/merge/consistency)")
     except Exception as e:
         _log_stage_error("KP structural refinement", _debug, e)
 
@@ -1073,8 +1068,7 @@ def _merge_similar_topics(db: QADatabase, client, debug: Callable):
     if mergers:
         merged_count = 0
         for old_topic, new_topic in mergers.items():
-            rows = db.conn.execute("UPDATE qa_pairs SET topic=? WHERE topic=?", (new_topic, old_topic))
-            merged_count += rows.rowcount
+            merged_count += db.rename_topic(new_topic, old_topic)
 
         # Sync topic_links: read all → rename in memory → aggregate → rewrite.
         # In-memory merge avoids UNIQUE constraint violations that UPDATE would cause

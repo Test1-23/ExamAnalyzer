@@ -453,14 +453,27 @@ class QADatabase:
             for stmt in statements:
                 try:
                     self.conn.execute(stmt)
-                except sqlite3.OperationalError:
-                    pass  # column already exists from a previous partial run
+                except sqlite3.OperationalError as e:
+                    if "duplicate column" not in str(e).lower():
+                        raise
             self.conn.execute(
                 "INSERT INTO schema_version (version, description) VALUES (?, ?)",
                 (version, description),
             )
             _log.info(f"DB migration v{version}: {description}")
         self.conn.commit()
+
+    def update_qa_topic(self, qa_id: int, topic: str):
+        with self._write_lock:
+            self.conn.execute("UPDATE qa_pairs SET topic=? WHERE id=?", (topic, qa_id))
+            self.conn.commit()
+
+    def rename_topic(self, new_topic: str, old_topic: str) -> int:
+        with self._write_lock:
+            rows = self.conn.execute(
+                "UPDATE qa_pairs SET topic=? WHERE topic=?", (new_topic, old_topic))
+            self.conn.commit()
+            return rows.rowcount
 
     def insert(self, question_text: str, answer_text: str,
                topic: str = "", paper: str = "",
@@ -499,11 +512,16 @@ class QADatabase:
     def get_by_ids(self, ids: list[int]) -> list[dict]:
         if not ids:
             return []
-        placeholders = ",".join("?" * len(ids))
-        rows = self.conn.execute(
-            f"SELECT * FROM qa_pairs WHERE id IN ({placeholders})", ids
-        ).fetchall()
-        row_map = {r["id"]: dict(r) for r in rows}
+        row_map = {}
+        CHUNK = 900  # SQLite max bound parameters = 999
+        for i in range(0, len(ids), CHUNK):
+            chunk = ids[i:i + CHUNK]
+            placeholders = ",".join("?" * len(chunk))
+            rows = self.conn.execute(
+                f"SELECT * FROM qa_pairs WHERE id IN ({placeholders})", chunk
+            ).fetchall()
+            for r in rows:
+                row_map[r["id"]] = dict(r)
         return [row_map[i] for i in ids if i in row_map]
 
     def count(self) -> int:
@@ -722,18 +740,6 @@ class QADatabase:
                    VALUES (?, ?, ?, datetime('now'),
                     (SELECT topic_id FROM fragment_membership WHERE fragment_id=?))""",
                 (fragment_id, topic_id, loyalty, fragment_id),
-            )
-            self.conn.commit()
-
-    def record_fragment_help(self, fragment_id: str, helped_qa_id: int,
-                              help_effect: float = 0.0):
-        """Record that a fragment helped answer a question."""
-        with self._write_lock:
-            self.conn.execute(
-                """INSERT OR REPLACE INTO fragment_help_map
-                   (fragment_id, helped_qa_id, help_effect)
-                   VALUES (?, ?, ?)""",
-                (fragment_id, helped_qa_id, help_effect),
             )
             self.conn.commit()
 

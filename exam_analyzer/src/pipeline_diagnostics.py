@@ -17,84 +17,6 @@ from .logger import get_logger
 _log = get_logger()
 
 
-# ═══════════════════════════════════════════════════════════════
-# Closed-loop: confusion, QA challenge, pitfalls, trends
-# ═══════════════════════════════════════════════════════════════
-
-def detect_confusion(db: QADatabase, student_id: str, current_question: str,
-                     topic: str, debug_cb=None) -> bool:
-    """Detect if student's question indicates confusion about a topic."""
-    row = db.conn.execute(
-        """SELECT COUNT(*) as cnt FROM confusion_events
-           WHERE student_id = ? AND topic = ? AND created_at > datetime('now', '-1 hour')""",
-        (student_id, topic),
-    ).fetchone()
-    if row and row["cnt"] >= 2:
-        if debug_cb:
-            debug_cb(f"  Confusion threshold reached for topic '{topic}' (student {student_id})")
-        return True
-    confusion_keywords = ["confused", "don't understand", "why", "how come",
-                          "不理解", "不懂", "为什么", "怎么回事", "不对吧"]
-    q_lower = current_question.lower()
-    return any(kw in q_lower for kw in confusion_keywords)
-
-
-def trigger_kp_review_from_confusion(db: QADatabase, kp_id: str, debug_cb=None):
-    """Mark a KP for adversarial re-review due to accumulated student confusions."""
-    kp = db.get_kp_by_id(kp_id)
-    if not kp:
-        return
-    db.upsert_kp(
-        kp_id=kp_id, name=kp.get("name", ""), description=kp.get("description", ""),
-        core_concept=kp.get("core_concept", ""), core_detail=kp.get("core_detail", ""),
-        cohesion=kp.get("cohesion"), evidence_count=kp.get("evidence_count", 0),
-        quality="draft", challenge_history=kp.get("challenge_history", ""),
-    )
-    if debug_cb:
-        debug_cb(f"  KP {kp_id} marked for re-review due to student confusion")
-
-
-def challenge_kp_with_new_qa(db: QADatabase, kp_id: str, new_qa_id: int,
-                             client, debug_cb=None) -> bool:
-    """Check if a new QA contradicts or refines an existing KP."""
-    kp = db.get_kp_by_id(kp_id)
-    qa = db.get(new_qa_id)
-    if not kp or not qa:
-        return False
-    concept = kp.get("core_concept", "") or kp.get("description", "")
-    if not concept:
-        return False
-    sys = "Compare a new QA with an existing knowledge point. Find contradictions or precision gaps. Output JSON."
-    usr = (
-        f"Knowledge Point concept: {concept}\n"
-        f"KP detail: {kp.get('core_detail', '')}\n\n"
-        f"New QA:\nQ: {qa['question_text']}\nA: {qa['answer_text']}\n\n"
-        "Does the new QA contradict the KP? Does it reveal missing precision?\n"
-        'Return: {"contradiction": true/false, "precision_gap": true/false, '
-        '"detail": "explanation if any"}'
-    )
-    messages = [{"role": "system", "content": sys}, {"role": "user", "content": usr}]
-    try:
-        result = call_flash(client, messages, max_retries=1, debug_callback=debug_cb)
-        result = result if isinstance(result, dict) else {}
-    except Exception as e:
-        if debug_cb:
-            debug_cb(f"  QA challenge failed for KP {kp_id}: {e}")
-        return False
-    if result.get("contradiction") or result.get("precision_gap"):
-        db.upsert_kp(
-            kp_id=kp_id, name=kp.get("name", ""), description=kp.get("description", ""),
-            core_concept=kp.get("core_concept", ""), core_detail=kp.get("core_detail", ""),
-            cohesion=kp.get("cohesion"), evidence_count=kp.get("evidence_count", 0),
-            quality="draft", challenge_history=kp.get("challenge_history", ""),
-        )
-        if debug_cb:
-            debug_cb(f"  KP {kp_id} challenged by new QA {new_qa_id}: "
-                     f"contradiction={result.get('contradiction')}, gap={result.get('precision_gap')}")
-        return True
-    return False
-
-
 def auto_discover_pitfalls(db: QADatabase, kp_id: str, debug_cb=None) -> list[dict]:
     """Discover pitfalls from Phase 2 missed_points data for a KP."""
     qa_rows = db.conn.execute(
@@ -1110,24 +1032,6 @@ def _compute_graph_centroid(vectors: list[np.ndarray], weights: list[float],
             return new_centroid
         centroid = new_centroid
     return centroid
-
-
-def _compute_eigenvector_centrality(adj_matrix: np.ndarray, max_iter: int = 50) -> np.ndarray:
-    """Power iteration for eigenvector centrality."""
-    n = adj_matrix.shape[0]
-    if n == 0:
-        return np.array([])
-    centrality = np.ones(n) / n
-    for _ in range(max_iter):
-        new_c = adj_matrix @ centrality
-        norm = np.linalg.norm(new_c)
-        if norm < 1e-8:
-            break
-        new_c /= norm
-        if np.linalg.norm(new_c - centrality) < 1e-6:
-            return new_c
-        centrality = new_c
-    return centrality
 
 
 def _adjust_vectors_from_feedback(db: QADatabase, debug_cb=None) -> dict:
