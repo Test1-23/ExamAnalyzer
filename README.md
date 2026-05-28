@@ -1,12 +1,14 @@
 # Exam Knowledge Point Analyzer
 
-从配对试卷 PDF（Question Paper + Mark Scheme）中提取知识点，构建知识图谱，提供对话式 AI 学习助手。
+从配对试卷 PDF（Question Paper + Mark Scheme）中提取知识点，构建自组织知识图谱，提供对话式 AI 学习助手。
+
+> **系统仅支持文本层 PDF。** 扫描件、图片型 PDF、内嵌图片文字、图表均无法处理。如果你的 PDF 是扫描版，需先用 OCR 工具转为可搜索 PDF 后再使用。
 
 ## 介绍
 
-本工具自动解析试卷 PDF，配对题目与答案，利用 LLM 提取和蒸馏知识点，生成结构化的复习资料。内置的对话助手支持多轮问答、诊断测验和学习路径推荐。
+本工具自动解析试卷 PDF，配对题目与答案，利用 LLM 提取知识点并构建行为驱动的自组织知识图谱。内置对话助手支持多轮问答和学习路径推荐。
 
-核心流程：PDF 提取 → QA 配对 → 知识库积累 → 知识点蒸馏 → 知识图谱构建 → 对抗性精炼 → 离线分析。
+核心流程：PDF 提取 → QA 配对 → 知识库积累 → MS 得分点提取 → 行为驱动的 Topic 自组织 → 自动 KP 生成 → 离线分析 → 持续进化。
 
 ## 环境配置
 
@@ -86,12 +88,11 @@ python tests/test_suite.py chat     # 聊天端点测试
 
 | 组件 | 选型 |
 |------|------|
-| LLM | DeepSeek Flash (提取/评分) + Pro (复杂推理，可选) |
+| LLM | DeepSeek Flash（全流程，纯 Flash 无 Pro 依赖） |
 | Embedding | sentence-transformers (all-MiniLM-L6-v2 / paraphrase-multilingual-MiniLM-L12-v2) |
-| 数据库 | SQLite WAL 模式 |
-| PDF 提取 | pdfplumber (主) + PyMuPDF (fallback)，仅提取文本层，不支持 OCR/图片 |
+| 数据库 | SQLite WAL 模式，版本化迁移框架 |
+| PDF 提取 | pdfplumber (主) + PyMuPDF (fallback)，仅文本层，不支持 OCR/图片 |
 | Web | Flask + Jinja2 |
-| 聚类 | 余弦相似图连通分量 (HDBSCAN 备选) |
 
 ### 目录结构
 
@@ -100,22 +101,22 @@ exam_analyzer/
 ├── main.py                  # CLI 入口
 ├── app.py                   # Flask Web 服务 + 5-agent 聊天管线
 ├── src/                     # 核心库 (14 模块)
-│   ├── pipeline.py          # 核心流水线编排
-│   ├── knowledge_base.py    # SQLite 数据库 + 向量检索
+│   ├── pipeline.py          # 流水线编排: Phase 1/2 + 后处理 + 进化循环
+│   ├── knowledge_base.py    # SQLite 数据库 (31表) + 向量检索 + Beta权重
 │   ├── knowledge_graph.py   # QA 聚类 → KP 节点 → 4种边 → 融合
-│   ├── offline_analyzer.py  # 离线分析：动词、难度、依赖
-│   ├── adversarial_refiner.py  # 对抗性精炼：挑战者/辩护者辩论
-│   ├── pipeline_diagnostics.py # 闭环改进 + 跨论文一致性
-│   ├── question_generator.py   # 题目模板提取 + 参数变异生成
-│   ├── deepseek_client.py   # DeepSeek API 客户端 (Flash + Pro)
-│   ├── embedding_cluster.py # 模型管理 + 语言检测 + 公共常量
-│   ├── pdf_extractor.py     # PDF 文本提取 (pdfplumber + PyMuPDF)
+│   ├── offline_analyzer.py  # 命令动词/难度/依赖分析
+│   ├── adversarial_refiner.py  # KP 拆分/合并 (对抗精炼已退役)
+│   ├── pipeline_diagnostics.py # Fragment迁移 + Topic演化 + 学生反馈
+│   ├── question_generator.py   # 模板提取 + 参数变异生成
+│   ├── deepseek_client.py   # DeepSeek API (Flash + 重试 + JSON提取)
+│   ├── embedding_cluster.py # 模型管理 + 语言检测
+│   ├── pdf_extractor.py     # PDF 文本提取 (pdfplumber → PyMuPDF)
 │   ├── file_pairer.py       # 文件名配对
 │   ├── models.py            # 数据类定义
 │   └── logger.py            # 日志 (RotatingFileHandler)
 ├── eval/                    # 质量评估
 │   └── feedback_agent.py    # 6 维度聊天质量评估
-├── tests/                   # 自动化测试 (gitignored)
+├── tests/                   # 自动化测试
 ├── input/                   # 试卷 PDF (gitignored)
 ├── intermediate/            # SQLite DB + 处理状态 (gitignored)
 ├── point/                   # 输出 (gitignored)
@@ -123,24 +124,45 @@ exam_analyzer/
 └── templates/               # Flask HTML 模板
 ```
 
-### 流水线阶段
+### 流水线架构
 
 ```
 论文 PDF 对 (N 篇，按年份升序)
   │
   ├─ PDF 提取 (pdfplumber → PyMuPDF fallback)
-  ├─ QA 配对 (Flash: 全文 QP+Answer → 匹配题目与答案)
+  ├─ QA 配对 (Flash: 全文 QP+MS → 匹配题目与答案)
   │
-  ├─ 逐 QA 处理 ──────────────────────────
+  ├─ 逐 QA 处理 ────────────────────────────────────
   │   Phase 1 (首篇): Flash summary + topic → 直接入库
-  │   Phase 2 (后续): summary → 检索 top-4 → Flash 答题 → Flash 评分 + 失分分类 → 入库
+  │   Phase 2 (后续): summary → 检索 + KP 参考 → 答题 → MS 评分 + 失分分类 → 入库
+  │   MS 得分点提取: Flash 拆分 MS 答案 → MS_Fragments
+  │   行为数据采集: 记录 Fragment 帮助了哪些题目 → Fragment_Help_Map
   │
-  ├─ 后处理 ──────────────────────────────
+  ├─ 后处理 ────────────────────────────────────────
   │   Topic Merge → Distillation → Review → points.txt
-  │   → Knowledge Graph (聚类 → KP 节点 → 4 种边 → 融合)
-  │   → Adversarial Refinement (挑战者/辩护者验证每个 KP)
-  │   → Offline Analysis (动词规律 + 难度评估 + 依赖发现)
-  │   → Pipeline Diagnostics (闭环改进 + 跨论文一致性)
+  │   Knowledge Graph (聚类 → KP 节点 → 4 种边 → 融合)
+  │   KP 结构精炼 (auto_split / auto_merge, 行为驱动)
+  │   Offline Analysis (动词规律 + 难度评估 + 依赖发现)
+  │   Pipeline Diagnostics (闭环 + 跨论文一致性)
+  │
+  └─ 自进化循环 ────────────────────────────────────
+      Fragment 迁移: 行为数据驱动的 Topic 边界重塑
+      Topic 演化: 分裂 / 合并 / 消解
+      自动 KP 生成: 稳定 Topic → Flash 命名 + 解释
+      学生反馈闭环: 困惑 → 难度调整
+```
+
+### 行为驱动的自组织知识图谱 (Phase 1-4)
+
+```
+阶段 A (1-2 份试卷): 胚胎期
+  MS 得分点提取 → 冷启动 Topic 分组 → 行为数据积累
+
+阶段 B (3-4 份试卷): 塑形期
+  Fragment 迁移 → Topic 边界重塑 → 稳定 Topic 生成 KP
+
+阶段 C (5+ 份试卷): 固形期
+  Topic 分裂/合并/消解 → KP 混入检索池 → 持续演化
 ```
 
 ### 聊天助手 (5-agent)
@@ -148,75 +170,50 @@ exam_analyzer/
 ```
 用户问题
   → Agent 1: Query Analyst — 关键词提取 + 问题分类 + 动词识别
-  → 混合检索: QARetriever + KP Cache + 分析上下文(难度/动词/依赖/学生状态)
-  → Agent 3: Answer Generator — 类型自适应 + [KB]/[General] 来源标记 + quiz + path_hint
+  → 混合检索: QARetriever + Dynamic_Topics stable KP + KP Cache
+  → Agent 3: Answer Generator — 类型自适应 + [KB]/[General] 来源标记
   → Agent 4: Critic — 审核循环 (max 2 轮)
   → Agent 5: Follow-up Suggester — 依赖感知的建议
   → 学生记忆记录 + 对话历史持久化
 ```
 
-### 数据流
-
-```
-PDF → QA pairs → KB (SQLite) → retrieval → Flash answering → grading
-                                                    ↓
-                                            topic_links (跨 topic 引用)
-                                                    ↓
-                                            points.txt (蒸馏输出)
-                                                    ↓
-                                    离线分析 → 知识图谱 → 对抗精炼 → 闭环
-```
-
-### 数据库表 (23 张)
+### 数据库表 (31 张)
 
 | 分组 | 表 |
 |------|----|
 | 核心存储 (6) | `qa_pairs`, `question_feedback`, `topic_links`, `exam_sessions`, `api_call_log`, `chat_history` |
+| 行为驱动知识图谱 (4) | `ms_fragments`, `fragment_help_map`, `fragment_membership`, `dynamic_topics` |
 | 分析产出 (7) | `topic_dependencies`, `command_verb_patterns`, `topic_difficulty`, `knowledge_points`, `kp_edges`, `qa_kp_membership`, `exam_trends` |
 | 学生模型 (4) | `student_memory`, `student_knowledge_state`, `confusion_events`, `student_trajectory` |
-| 自适应 (5) | `paper_signatures`, `dimension_baselines`, `diversity_signals`, `calibration_checks`, `correction_rules` |
-| 运维 (1) | `analysis_checkpoints` |
+| 自适应与进化 (6) | `paper_signatures`, `dimension_baselines`, `diversity_signals`, `calibration_checks`, `correction_rules`, `evolution_history` |
+| 运维与缓存 (4) | `analysis_checkpoints`, `schema_version`, `distillation_cache`, `api_call_log` |
 
 ### 关键设计决策
 
-- **Mark Scheme 为 ground truth**：不以题目文本提取知识点，而是将 QA 原样存储，在蒸馏阶段批量提取共性概念
+- **Mark Scheme 为唯一 Ground Truth**：MS 答案原文拆分为得分点 (MS_Fragments)，不可修改，所有知识追溯至此
+- **行为数据驱动聚类**：两个得分点是否属于同一概念，由它们是否互相帮助答题决定，替代 embedding 相似度聚类
+- **Topic 是活体**：会生长（新 Fragment 加入）、分裂（行为分化）、合并（行为趋同）、消解（成员流失）
+- **KP 是 Topic 的投影**：Topic 稳定后才由 Flash 生成命名和解释，Topic 变化后重新生成
+- **质量由实测驱动**：KP 的有效性由 Phase 2 答题得分验证，非 Flash 自我评价
+- **对抗精炼已退役**：Flash 审查 Flash 被行为驱动的质量度量替代
+- **Wilson 区间 Beta 权重**：精确下置信界估计，小样本更保守
+- **增量蒸馏缓存**：MD5 指纹比对，仅重蒸变化的 Topic
 - **双语 prompt**：`detect_content_lang()` 自动中英文切换
-- **Beta 分布权重**：`weight = (success+1)/(total_attempts+2)`，低权重 topic 标记 `[needs review]`
-- **动态 K 检索**：`threshold=0.5, max_cap=15, min_k=3`，聊天用 `max_cap=5`
-- **线程安全**：`threading.Lock` 保护 DB 写，double-checked lock 初始化，所有 ThreadPoolExecutor 上限 8 或 16
-- **非致命错误**：PDF 提取失败、Flash 调用失败、离线分析失败均不阻塞主流程
-- **崩溃恢复**：`processed.json` 标记已完成论文，`analysis_checkpoints` 记录后处理进度
-- **`%` 格式化 prompt**：禁止 `.format()`——Mark Scheme 文本含 `{` `}` 会导致崩溃
-
-### 注意事项
-
-1. **首次运行需下载 embedding 模型** (~80MB all-MiniLM-L6-v2, ~120MB paraphrase-multilingual)。国内建议设置 `HF_ENDPOINT=https://hf-mirror.com`
-2. **论文按年份升序处理**：最早论文先进 KB，提供更好的检索基础
-3. **Phase 2 必须记录 `record_attempt(False)`**：未使用的 QA 也需降低 Beta weight，否则权重失真
-4. **DB 重建**：如遇 schema 不匹配，删除 `intermediate/` 重跑
+- **`%` 格式化 prompt**：禁止 `.format()`——MS 文本含 `{` `}` 会导致崩溃
+- **线程安全 + 动态并发**：`threading.Lock` + `PIPELINE_MAX_WORKERS` 环境变量，默认 8/16
 
 ### 已知限制
 
-- **无法处理图片型 PDF**：系统依赖 `pdfplumber` + `PyMuPDF` 提取**文本层**，不具备 OCR 能力。
-  - 扫描件 PDF（整页为图片）会提取到空白内容，导致分析失败
-  - 内嵌图片中的文字（如流程图标注、截图公式）会被完全忽略
-  - 图表、示意图等视觉信息无法被提取和理解
-  - 如果你的 PDF 是扫描版，需先用 OCR 工具（如 Adobe Acrobat、Tesseract）将其转为可搜索 PDF
+- **仅支持文本层 PDF**：不具备 OCR 能力。扫描件、内嵌图片文字、图表均无法处理。扫描版 PDF 需用 Tesseract 等工具预处理
 - **内容准确性需人工审核**：LLM 缺乏精确领域知识，输出应视为强草稿
-- **Pitfalls 为推论而非经验**：系统无真实学生错题数据，pitfall 来自模型推断
-- **难度评估无 ground truth**：基于 Flash 行为信号（miss_rate），与学生真实感知可能有偏差
-- **Embedding 模型语言锁定**：首篇论文的语言决定检索模型，跨语言场景精度下降
-- **Topic 名称多样性**：不同论文的 Mark Scheme 用词不同——这是有意的，学生需要识别变体命名
+- **Pitfalls 为推论**：系统无真实学生错题数据，陷阱来自 Phase 2 失分推断
+- **行为数据冷启动**：前 2 份试卷期间 Fragment 迁移和 Topic 演化受限，知识结构质量随数据积累提升
+- **Embedding 仅辅助**：仅用于冷启动临时分组，不作为主要聚类信号
 
 ## License
 
 本项目基于 **GNU Affero General Public License v3.0 (AGPL-3.0)** 许可。
 
-**核心要求**：任何使用、修改或部署本软件的组织和个人，必须将其修改后的源代码公开。
-
-- 如果你只是在本地运行——无需公开任何东西
-- 如果你修改了代码并部署为公开服务（包括网站、API）——必须公开你的修改
-- 如果你将本软件或衍生作品分发给他人——必须同时提供完整源代码
-- 本条目不阻止商业使用，但要求商业用户同样履行开源义务
+**核心要求**：任何修改或部署为本软件的组织和个人，必须公开其修改后的源代码。
 
 详见 [LICENSE](LICENSE) 文件。
