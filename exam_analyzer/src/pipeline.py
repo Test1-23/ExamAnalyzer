@@ -786,6 +786,24 @@ def run_pipeline(
         except Exception as e:
             _debug(f"Cross-paper check failed (non-fatal): {e}")
 
+    # -- Compute topic_related + groups (read-only, before post-processing try block) --
+    groups = db.get_topic_groups()
+    topic_related = {}
+    for topic, qas in groups.items():
+        if not topic or topic == "(uncategorized)":
+            continue
+        if any(src == topic or dst == topic for (src, dst) in topic_links):
+            continue
+        query = qas[0].get("knowledge_summary", "") or qas[0]["question_text"]
+        results = retriever.search(query, threshold=0.5, min_k=3, max_cap=15)
+        counts = {}
+        for r in results:
+            rt = r.get("topic", "")
+            if rt and rt != topic:
+                counts[rt] = counts.get(rt, 0) + 1
+        if counts:
+            topic_related[topic] = sorted(counts.items(), key=lambda x: -x[1])
+
     # -- Post-processing core (wrapped: ensures db.close() on failure) --
     content = ""
     try:
@@ -820,7 +838,6 @@ def run_pipeline(
 
     # Mark representative and cross-topic QAs
     weights = db.get_all_weights()
-    groups = db.get_topic_groups()
     for topic, qas in groups.items():
         if not topic or topic == "(uncategorized)" or not qas:
             continue
@@ -833,24 +850,6 @@ def run_pipeline(
                any(src == topic and dst != topic for (src, dst) in topic_links):
                 db.conn.execute("UPDATE qa_pairs SET is_cross_topic = 1 WHERE id = ?", (qa["id"],))
     db.conn.commit()
-
-    # Compute retrieval-based topic relations for cold-start See also
-    topic_related = {}
-    groups = db.get_topic_groups()
-    for topic, qas in groups.items():
-        if not topic or topic == "(uncategorized)":
-            continue
-        if any(src == topic or dst == topic for (src, dst) in topic_links):
-            continue
-        query = qas[0].get("knowledge_summary", "") or qas[0]["question_text"]
-        results = retriever.search(query, threshold=0.5, min_k=3, max_cap=15)
-        counts = {}
-        for r in results:
-            rt = r.get("topic", "")
-            if rt and rt != topic:
-                counts[rt] = counts.get(rt, 0) + 1
-        if counts:
-            topic_related[topic] = sorted(counts.items(), key=lambda x: -x[1])
 
     # -- Knowledge graph: QA clustering → KP nodes → edge discovery --
     try:
@@ -1563,7 +1562,7 @@ def _run_evolution_cycle(db: QADatabase, client, debug: Callable):
     # -- Phase 2: Fragment migration + topic stats --
     try:
         from .pipeline_diagnostics import run_phase2_cycle
-        result = run_phase2_cycle(db_path, debug_cb=debug)
+        result = run_phase2_cycle(db.db_path, debug_cb=debug)
         if result.get("migrated", 0) > 0:
             debug(f"Evolution: {result['migrated']} fragments migrated")
     except Exception as e:

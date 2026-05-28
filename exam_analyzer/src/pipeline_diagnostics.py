@@ -659,6 +659,19 @@ def _update_topic_stats(db: QADatabase, debug_cb=None) -> int:
     all_topics = [r["topic_id"] for r in db.conn.execute(
         "SELECT topic_id FROM dynamic_topics"
     ).fetchall()]
+
+    # Pre-load fragment help data (avoid O(n) queries in loyalty loop)
+    frag_helps = {}
+    help_rows = db.conn.execute(
+        "SELECT fragment_id, helped_qa_id FROM fragment_help_map"
+    ).fetchall()
+    for r in help_rows:
+        frag_helps.setdefault(r["fragment_id"], set()).add(r["helped_qa_id"])
+
+    topic_helps = {}
+    for topic_id in all_topics:
+        topic_helps[topic_id] = db.get_topic_helped_questions(topic_id)
+
     updated = 0
     for topic_id in all_topics:
         mass_row = db.conn.execute(
@@ -677,7 +690,8 @@ def _update_topic_stats(db: QADatabase, debug_cb=None) -> int:
         if len(frags) < 2:
             cohesion = 1.0
         else:
-            loyalties = [_compute_loyalty(db, fid, topic_id) for fid in frags]
+            loyalties = [_compute_loyalty(db, fid, topic_id, frag_helps, topic_helps)
+                         for fid in frags]
             cohesion = sum(loyalties) / len(loyalties)
         prev_rows = db.conn.execute(
             """SELECT COUNT(*) as cnt FROM fragment_membership

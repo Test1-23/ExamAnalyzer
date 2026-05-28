@@ -398,7 +398,7 @@ def discover_sequential_edges(db: QADatabase, clustering: dict, kp_ids: list[str
     qa_to_kp = {}
     for kp_id in kp_ids:
         cluster_idx = _parse_kp_cluster_idx(kp_id)
-        if cluster_idx < len(clusters):
+        if cluster_idx is not None and cluster_idx < len(clusters):
             for qa_idx in clusters[cluster_idx]:
                 qa_to_kp[qa_list[qa_idx]["id"]] = kp_id
 
