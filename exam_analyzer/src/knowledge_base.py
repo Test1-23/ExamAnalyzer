@@ -1629,8 +1629,8 @@ class QARetriever:
                 channel_b_ids.update(r["id"] for r in adj_rows2)
 
         # B2: Graph walk — QAs whose fragments helped same questions
-        if channel_a_ids:
-            walk_source = list(channel_a_ids)[:15]  # Cap source to control query complexity
+        walk_source = list(channel_a_ids)[:15] if channel_a_ids else []  # single conversion, reused
+        if walk_source:
             placeholders_a = ",".join("?" * len(walk_source))
             walk_rows = self._db.conn.execute(
                 f"SELECT DISTINCT f2.qa_id FROM ("
@@ -1639,7 +1639,8 @@ class QARetriever:
                 f"WHERE mf1.qa_id IN ({placeholders_a})"
                 f") shared_helps "
                 f"JOIN fragment_help_map fhm2 ON shared_helps.helped_qa_id = fhm2.helped_qa_id "
-                f"JOIN ms_fragments f2 ON fhm2.fragment_id = f2.point_id",
+                f"JOIN ms_fragments f2 ON fhm2.fragment_id = f2.point_id "
+                f"LIMIT 30",
                 walk_source
             ).fetchall()
             channel_b_ids.update(r["qa_id"] for r in walk_rows)
@@ -1677,31 +1678,37 @@ class QARetriever:
                 if adj_row and adj_row["cnt"] > 0:
                     adjacency_map[ct] = True
 
-        # Pre-load helped question set from Channel A (one query for all behavior scores)
+        # Pre-load helped question set from Channel A (reuse walk_source, one query)
         helped_qa_set = set()
-        if channel_a_ids:
+        if walk_source:
             bh_all_rows = self._db.conn.execute(
                 f"SELECT DISTINCT helped_qa_id FROM fragment_help_map fhm2 "
                 f"JOIN ms_fragments mf2 ON fhm2.fragment_id = mf2.point_id "
-                f"WHERE mf2.qa_id IN ({','.join('?' * len(list(channel_a_ids)[:15]))})",
-                list(channel_a_ids)[:15]
+                f"WHERE mf2.qa_id IN ({','.join('?' * len(walk_source))})",
+                walk_source
             ).fetchall()
             helped_qa_set = {r["helped_qa_id"] for r in bh_all_rows}
 
-        # Behavior scores: pre-load per candidate (one batch query)
+        # Behavior scores: chunked batch to avoid SQLite 999-param limit
         candidate_qa_ids = [qa["id"] for qa in candidates]
         behavior_scores = {}
         if helped_qa_set and candidate_qa_ids:
-            bh_batch_rows = self._db.conn.execute(
-                f"SELECT mf.qa_id, COUNT(*) as cnt FROM fragment_help_map fhm "
-                f"JOIN ms_fragments mf ON fhm.fragment_id = mf.point_id "
-                f"WHERE mf.qa_id IN ({','.join('?' * len(candidate_qa_ids))})"
-                f" AND fhm.helped_qa_id IN ({','.join('?' * len(helped_qa_set))})"
-                f" GROUP BY mf.qa_id",
-                candidate_qa_ids + list(helped_qa_set)
-            ).fetchall()
-            for r in bh_batch_rows:
-                behavior_scores[r["qa_id"]] = min(1.0, r["cnt"] / 10.0)
+            helped_list = list(helped_qa_set)
+            CHUNK = 400   # leave room for candidate_qa_ids chunk
+            for i in range(0, len(candidate_qa_ids), CHUNK):
+                c_chunk = candidate_qa_ids[i:i + CHUNK]
+                for j in range(0, len(helped_list), CHUNK):
+                    h_chunk = helped_list[j:j + CHUNK]
+                    bh_batch_rows = self._db.conn.execute(
+                        f"SELECT mf.qa_id, COUNT(*) as cnt FROM fragment_help_map fhm "
+                        f"JOIN ms_fragments mf ON fhm.fragment_id = mf.point_id "
+                        f"WHERE mf.qa_id IN ({','.join('?' * len(c_chunk))})"
+                        f" AND fhm.helped_qa_id IN ({','.join('?' * len(h_chunk))})"
+                        f" GROUP BY mf.qa_id",
+                        c_chunk + h_chunk
+                    ).fetchall()
+                    for r in bh_batch_rows:
+                        behavior_scores[r["qa_id"]] = min(1.0, r["cnt"] / 10.0)
 
         # Mixed ranking (pre-loaded data, zero DB queries)
         for qa in candidates:

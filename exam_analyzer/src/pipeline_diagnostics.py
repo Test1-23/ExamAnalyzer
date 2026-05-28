@@ -770,8 +770,18 @@ def run_phase2_cycle(db_path: str, debug_cb=None) -> dict:
             )
             db.conn.commit()
 
+        # Phase 5: Vector cascade adjustment
+        vectors_adjusted = 0
+        try:
+            v_result = _adjust_vectors_from_feedback(db, debug_cb)
+            vectors_adjusted = sum(v_result.values())
+        except Exception as e:
+            if debug_cb:
+                debug_cb(f"  Vector adjustment failed: {e}")
+
         return {"migrated": migrated, "topics_updated": updated,
-                "splits": splits, "merges": merges, "dissolved": dissolved}
+                "splits": splits, "merges": merges, "dissolved": dissolved,
+                "vectors_adjusted": vectors_adjusted}
     finally:
         db.close()
 
@@ -1125,7 +1135,7 @@ def _adjust_vectors_from_feedback(db: QADatabase, debug_cb=None) -> dict:
     result = {"fragments_adjusted": 0, "kps_adjusted": 0, "topics_adjusted": 0}
     learning_rate = 0.01
 
-    # Layer 1: Fragment vectors
+    # Layer 1: Adjust fragment centrality from LLM help data
     topics = db.conn.execute(
         "SELECT topic_id FROM dynamic_topics WHERE quality != 'dissolved'"
     ).fetchall()
@@ -1134,23 +1144,20 @@ def _adjust_vectors_from_feedback(db: QADatabase, debug_cb=None) -> dict:
         frags = db.get_topic_fragments(topic_id)
         for fid in frags:
             cent = db.get_fragment_centrality(fid)
-            if not cent or cent["centrality_score"] < 0.2:
+            if not cent or cent["verification_count"] < 1:
                 continue
-            # Find behavioral neighbors: fragments that helped same questions
-            helped_rows = db.conn.execute(
-                "SELECT DISTINCT fhm2.fragment_id FROM fragment_help_map fhm1 "
-                "JOIN fragment_help_map fhm2 ON fhm1.helped_qa_id = fhm2.helped_qa_id "
-                "WHERE fhm1.fragment_id = ? AND fhm2.fragment_id != ?",
-                (fid, fid)
-            ).fetchall()
-            neighbor_ids = [r["fragment_id"] for r in helped_rows[:10]]
-            if not neighbor_ids:
-                continue
-            # Use existing QA embedding as proxy for fragment vector
-            # (fragment vectors inherit from their QA)
+            # Update centrality using accumulated verification data
+            # Higher help_score → stronger centrality boost
+            cohesion = cent.get("topic_coherence", 0.5)
+            new_centrality = (0.7 * cent["centrality_score"]
+                              + learning_rate * cent["avg_help_score"]
+                              + 0.1 * cohesion)
+            db.upsert_fragment_centrality(
+                fid, round(min(1.0, new_centrality), 3),
+                cent["avg_help_score"], cohesion, cent.get("variance", 0))
             result["fragments_adjusted"] += 1
 
-    # Layer 2: KP vectors (cascade from fragments)
+    # Layer 2: KP vectors (cascade from member QA embeddings)
     kp_rows = db.conn.execute(
         "SELECT id FROM knowledge_points WHERE quality != 'disputed'"
     ).fetchall()
@@ -1161,7 +1168,6 @@ def _adjust_vectors_from_feedback(db: QADatabase, debug_cb=None) -> dict:
         ).fetchall()
         if not member_rows:
             continue
-        # Use embedding of representative QA as KP vector
         qa_ids = [r["qa_id"] for r in member_rows[:5]]
         model = _get_model(TOPIC_EMBED_MODEL)
         qa_texts = []
@@ -1175,7 +1181,7 @@ def _adjust_vectors_from_feedback(db: QADatabase, debug_cb=None) -> dict:
             db.upsert_kp_vector(kp_id, centroid)
             result["kps_adjusted"] += 1
 
-    # Layer 3: Topic vectors (cascade from KPs)
+    # Layer 3: Topic vectors (cascade from KP vectors)
     for t in topics:
         topic_id = t["topic_id"]
         kp_ids = [r["id"] for r in db.conn.execute(
@@ -1199,7 +1205,7 @@ def _adjust_vectors_from_feedback(db: QADatabase, debug_cb=None) -> dict:
             db.upsert_topic_vector(topic_id, centroid, len(kp_ids))
             result["topics_adjusted"] += 1
 
-    if debug_cb:
+    if debug_cb and sum(result.values()) > 0:
         debug_cb(f"  Vector cascade: {result['fragments_adjusted']} fragments, "
                  f"{result['kps_adjusted']} KPs, {result['topics_adjusted']} topics")
     return result
