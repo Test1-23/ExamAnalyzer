@@ -19,8 +19,18 @@
 pip install -r requirements.txt
 ```
 
-在 `exam_analyzer/config.json` 中配置 API，或通过环境变量 `DEEPSEEK_API_URL` / `DEEPSEEK_API_KEY` 设置：
+API 可通过三种方式配置（优先级从高到低）：
 
+```bash
+# 方式一：环境变量
+export DEEPSEEK_API_URL="https://api.deepseek.com/v1"
+export DEEPSEEK_API_KEY="sk-..."
+
+# 方式二：Web 界面（启动后在浏览器中填写）
+# 打开 http://127.0.0.1:5000 → 在页面顶部填写 API URL 和 Key → 保存
+
+# 方式三：配置文件 exam_analyzer/config.json
+```
 ```json
 {
   "api_url": "https://api.deepseek.com/v1",
@@ -59,7 +69,7 @@ python app.py
 # 浏览器打开 http://127.0.0.1:5000
 ```
 
-在网页中配置 API → 点击「开始分析」即可自动运行全流程。页面实时显示进度、日志和输出结果。分析完成后自动加载知识库，可立即开始对话问答。
+在网页顶部填写 API URL 和 Key（自动保存，下次无需重填）→ 点击「开始分析」即可自动运行全流程。页面实时显示进度、日志和输出结果。分析完成后自动加载知识库，可立即开始对话问答。
 
 **方式二：命令行**
 
