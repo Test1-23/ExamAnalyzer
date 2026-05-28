@@ -14,9 +14,31 @@ import numpy as np
 from .deepseek_client import call_flash
 from .knowledge_base import QADatabase
 from .embedding_cluster import _get_model, detect_content_lang, TOPIC_EMBED_MODEL
+from .models import KPSpec, KpEdgeSpec
+from .constants import (
+    EDGE_FUSION_RETRIEVAL_W, EDGE_FUSION_SEMANTIC_W,
+    EDGE_FUSION_SEQUENTIAL_W, EDGE_FUSION_LEARNING_PATH_W,
+    EDGE_TRANSITION_DIVISOR,
+)
 from .logger import get_logger
 
 _log = get_logger()
+
+
+def _build_qa_to_kp_mapping(clusters, qa_list, kp_ids):
+    """Build QA index -> KP ID mapping from clusters. Shared by edge discovery."""
+    qa_to_kp = {}
+    for kp_id in kp_ids:
+        cluster_idx = _parse_kp_cluster_idx(kp_id)
+        if cluster_idx is not None and cluster_idx < len(clusters):
+            for qa_idx in clusters[cluster_idx]:
+                qa_to_kp[qa_list[qa_idx]["id"]] = kp_id
+    return qa_to_kp
+
+
+def _transition_weight(count: int) -> float:
+    """Normalize transition count to [0, 1] weight."""
+    return min(count / EDGE_TRANSITION_DIVISOR, 1.0)
 
 
 def _parse_kp_cluster_idx(kp_id: str) -> int | None:
@@ -228,11 +250,12 @@ def generate_kps(db: QADatabase, clustering: dict, client, debug_cb=None) -> lis
 
         # Fallback: auto-name clusters that Flash failed to name
         if not groups:
-            for gi_in_batch, cluster_idx in enumerate(batch_clusters):
-                fallback_topic = qa_list[clusters[cluster_idx][0]].get("topic", "Unnamed")
+            for gi_in_batch, cluster in enumerate(batch_clusters):
+                fallback_topic = qa_list[cluster[0]].get("topic", "Unnamed")
+                global_idx = batch_start + gi_in_batch
                 groups.append({
                     "index": gi_in_batch,
-                    "name": f"{fallback_topic} (auto-{cluster_idx})",
+                    "name": f"{fallback_topic} (auto-{global_idx})",
                     "description": "",
                 })
 
@@ -256,13 +279,13 @@ def generate_kps(db: QADatabase, clustering: dict, client, debug_cb=None) -> lis
 
                 # Store KP
                 centroid_bytes = centroid.tobytes() if centroid is not None else None
-                db.upsert_kp(
+                db.upsert_kp(KPSpec(
                     kp_id=kp_id, name=name, description=description,
                     cluster_id=cluster_idx, centroid_vector=centroid_bytes,
                     cohesion=cohesions[cluster_idx],
                     evidence_count=len(cluster),
                     quality="draft",
-                )
+                ))
 
                 # Store QA-KP membership
                 for qa_idx, dist in qa_dists:
@@ -299,7 +322,7 @@ def generate_kps(db: QADatabase, clustering: dict, client, debug_cb=None) -> lis
 
 
 def discover_kp_edges(db: QADatabase, clustering: dict, kp_ids: list[str],
-                      client, debug_cb=None) -> int:
+                      debug_cb=None) -> int:
     """Discover edges between KPs: retrieval (Phase 2 behavior) + semantic (embedding).
 
     Returns number of edges created.
@@ -334,25 +357,19 @@ def discover_kp_edges(db: QADatabase, clustering: dict, kp_ids: list[str],
                 cos = float(cos_mat[i][j])
                 if cos >= 0.5:
                     a, b = kp_ids_list[i], kp_ids_list[j]
-                    db.upsert_kp_edge(
+                    db.upsert_kp_edge(KpEdgeSpec(
                         source_kp=a, target_kp=b,
                         edge_type="related",
                         semantic_weight=round(cos, 3),
                         combined_strength=round(cos, 3),
                         confidence="medium" if cos >= 0.65 else "low",
-                    )
+                    ))
                     edge_count += 1
 
     # Retrieval edges: from topic_links (Phase 2 behavior)
     topic_links = db.get_topic_links()
     if topic_links:
-        # Build QA index → KP mapping
-        qa_to_kp = {}
-        for kp_id in kp_ids:
-            cluster_idx = _parse_kp_cluster_idx(kp_id)
-            if cluster_idx is not None and cluster_idx < len(clusters):
-                for qa_idx in clusters[cluster_idx]:
-                    qa_to_kp[qa_list[qa_idx]["id"]] = kp_id
+        qa_to_kp = _build_qa_to_kp_mapping(clusters, qa_list, kp_ids)
 
         for (src_topic, dst_topic), count in topic_links.items():
             if count < 2:
@@ -368,13 +385,13 @@ def discover_kp_edges(db: QADatabase, clustering: dict, kp_ids: list[str],
             for sk in src_kps:
                 for dk in dst_kps:
                     if sk != dk:
-                        db.upsert_kp_edge(
-                            source_kp=dk, target_kp=sk,  # reversed: dst was used for src → dst is prereq
+                        db.upsert_kp_edge(KpEdgeSpec(
+                            source_kp=dk, target_kp=sk,  # reversed
                             edge_type="prerequisite",
                             retrieval_weight=count,
-                            combined_strength=min(count / 10, 1.0),
+                            combined_strength=_transition_weight(count),
                             confidence="medium" if count >= 4 else "low",
-                        )
+                        ))
                         edge_count += 1
 
     if debug_cb:
@@ -393,18 +410,11 @@ def discover_sequential_edges(db: QADatabase, clustering: dict, kp_ids: list[str
     qa_list = clustering["qa_list"]
     clusters = clustering["clusters"]
 
-    # Build QA → KP mapping
-    qa_to_kp = {}
-    for kp_id in kp_ids:
-        cluster_idx = _parse_kp_cluster_idx(kp_id)
-        if cluster_idx is not None and cluster_idx < len(clusters):
-            for qa_idx in clusters[cluster_idx]:
-                qa_to_kp[qa_list[qa_idx]["id"]] = kp_id
+    qa_to_kp = _build_qa_to_kp_mapping(clusters, qa_list, kp_ids)
 
-    # Natural sort key for question numbers: "1(a)" → (1, "a"), "10(a)" → (10, "a")
-    import re as _re
+    # Natural sort key for question numbers: "1(a)" -> (1, "a"), "10(a)" -> (10, "a")
     def _qn_sort_key(qn):
-        m = _re.match(r'^(\d+)', qn)
+        m = re.match(r'^(\d+)', qn)
         num = int(m.group(1)) if m else 0
         suffix = qn[m.end():] if m else qn
         return (num, suffix)
@@ -437,13 +447,13 @@ def discover_sequential_edges(db: QADatabase, clustering: dict, kp_ids: list[str
     for (a, b), count in transitions.items():
         num_papers = len(paper_kp_pairs.get((a, b), set()))
         if num_papers >= 3 and a != b:
-            db.upsert_kp_edge(
+            db.upsert_kp_edge(KpEdgeSpec(
                 source_kp=a, target_kp=b,
                 edge_type="sequential",
-                sequential_weight=min(num_papers / 10, 1.0),
-                combined_strength=min(num_papers / 10, 1.0),
+                sequential_weight=_transition_weight(num_papers),
+                combined_strength=_transition_weight(num_papers),
                 confidence="high" if num_papers >= 5 else "medium",
-            )
+            ))
             edge_count += 1
 
     if debug_cb:
@@ -488,13 +498,13 @@ def discover_learning_path_edges(db: QADatabase, kp_ids: list[str],
     for (a, b), count in transitions.items():
         num_students = len(student_pairs.get((a, b), set()))
         if num_students >= 3 and a != b:
-            db.upsert_kp_edge(
+            db.upsert_kp_edge(KpEdgeSpec(
                 source_kp=a, target_kp=b,
                 edge_type="learning_path",
-                learning_path_weight=min(num_students / 10, 1.0),
-                combined_strength=min(num_students / 10, 1.0),
+                learning_path_weight=_transition_weight(num_students),
+                combined_strength=_transition_weight(num_students),
                 confidence="high" if num_students >= 5 else "medium",
-            )
+            ))
             edge_count += 1
 
     if debug_cb:
@@ -522,7 +532,8 @@ def fuse_all_edges(db: QADatabase, kp_ids: list[str], debug_cb=None):
         sq = max(e.get("sequential_weight", 0) or 0 for e in edge_list)
         lp = max(e.get("learning_path_weight", 0) or 0 for e in edge_list)
 
-        combined = rw * 0.4 + sw * 0.3 + sq * 0.15 + lp * 0.15
+        combined = (rw * EDGE_FUSION_RETRIEVAL_W + sw * EDGE_FUSION_SEMANTIC_W
+                    + sq * EDGE_FUSION_SEQUENTIAL_W + lp * EDGE_FUSION_LEARNING_PATH_W)
 
         # Confidence from fusion rules
         if (rw > 0 and sw > 0) or (rw > 0 and sq > 0):
@@ -599,7 +610,7 @@ def run_knowledge_graph(db_path: str, api_url: str, api_key: str,
 
         # Step 3: Discover edges (semantic + retrieval)
         if kp_ids:
-            discover_kp_edges(db, clustering, kp_ids, client, _debug)
+            discover_kp_edges(db, clustering, kp_ids, _debug)
             # Step 3b: Sequential edges (exam ordering)
             discover_sequential_edges(db, clustering, kp_ids, _debug)
             # Step 3c: Learning path edges (student behavior)

@@ -9,11 +9,11 @@ Execution order: Task 2 (verbs) -> Task 3 (difficulty) -> Task 1 (dependencies)
 import json
 import os
 from collections import deque
-import numpy as np
 
 from .deepseek_client import create_client, call_flash
 from .knowledge_base import QADatabase
 from .embedding_cluster import _get_model, detect_content_lang, TOPIC_EMBED_MODEL
+from .models import VerbPatternSpec, DependencySpec
 from .logger import get_logger
 
 _log = get_logger()
@@ -303,14 +303,14 @@ def _phase3_summarize_patterns(verb_groups, verb_stats, db, client, debug_cb):
                                 f"than typical for '{verb}' questions ({avg_len:.0f} vs {mean_val:.0f} chars)."
                             )
 
-        db.upsert_verb_pattern(
+        db.upsert_verb_pattern(VerbPatternSpec(
             verb=verb, sample_count=stat["sample_count"],
             avg_answer_length=stat["avg_answer_length"],
             median_answer_length=stat["median_answer_length"],
             bullet_ratio=stat["bullet_ratio"], avg_bullet_count=stat["avg_bullet_count"],
             avg_miss_rate=stat["avg_miss_rate"], pattern_summary=summary,
             topic_specific_patterns=json.dumps(topic_specific) if topic_specific else "",
-        )
+        ))
         debug_cb(f"  Verb '{verb}': {stat['sample_count']} samples, pattern generated")
         return verb
 
@@ -576,93 +576,102 @@ def _phase2_calibrate_signals(db, qas, anchors, anchor_labels, verb_data, debug_
     return boundaries
 
 
+def _get_signal(qa, signal_name, db, all_qas):
+    """Compute a difficulty signal for a single QA.
+
+    Extracted from _phase3_classify_and_confirm for testability.
+    all_qas: pre-loaded list of all QAs (avoids repeated db.get_all() calls).
+    """
+    if signal_name == "effective_miss_rate":
+        return db.get_effective_miss_rate(qa["id"])
+    elif signal_name == "cross_topic":
+        topic = qa.get("topic", "")
+        if not topic:
+            return 0
+        rows = db.conn.execute(
+            "SELECT COUNT(*) as cnt FROM topic_links WHERE src_topic = ? OR dst_topic = ?",
+            (topic, topic),
+        ).fetchone()
+        return min(rows["cnt"] / 10, 1.0) if rows else 0
+    elif signal_name == "verb_percentile":
+        verb = qa.get("command_verb", "")
+        if not verb:
+            return None
+        ans_len = len(qa.get("answer_text", ""))
+        all_lens = [len(q.get("answer_text", "")) for q in all_qas if q.get("command_verb", "") == verb]
+        if len(all_lens) < 2:
+            return None
+        rank = sum(1 for l in all_lens if l < ans_len)
+        return rank / len(all_lens)
+    return None
+
+
+def _classify_difficulty(signals, boundaries, margin=0.10):
+    """Classify a QA's difficulty from signal values and calibrated boundaries.
+
+    Returns (label, is_boundary).  Extracted from _phase3_classify_and_confirm
+    to eliminate 5-level nesting.
+    """
+    votes = {"basic": 0, "intermediate": 0, "advanced": 0}
+    is_boundary = False
+
+    for sig_name, sig_val in signals.items():
+        if sig_val is None:
+            continue
+        bi_key = f"{sig_name}_basic_inter"
+        ia_key = f"{sig_name}_inter_adv"
+        if bi_key in boundaries:
+            mid = boundaries[bi_key]
+            if sig_val < mid * (1 - margin):
+                votes["basic"] += 1
+            elif sig_val < mid * (1 + margin):
+                votes["basic"] += 1
+                is_boundary = True
+            else:
+                if ia_key in boundaries:
+                    mid2 = boundaries[ia_key]
+                    if sig_val < mid2 * (1 - margin):
+                        votes["intermediate"] += 1
+                    elif sig_val < mid2 * (1 + margin):
+                        votes["intermediate"] += 1
+                        is_boundary = True
+                    else:
+                        votes["advanced"] += 1
+                else:
+                    votes["intermediate"] += 1
+        elif ia_key in boundaries:
+            mid2 = boundaries[ia_key]
+            if sig_val < mid2 * (1 - margin):
+                votes["intermediate"] += 1
+            elif sig_val < mid2 * (1 + margin):
+                votes["intermediate"] += 1
+                is_boundary = True
+            else:
+                votes["advanced"] += 1
+        else:
+            votes["intermediate"] += 1
+
+    if votes["advanced"] > 0:
+        return "advanced", is_boundary
+    elif votes["intermediate"] > 0:
+        return "intermediate", is_boundary
+    elif votes["basic"] > 0:
+        return "basic", is_boundary
+    return "intermediate", False
+
+
 def _phase3_classify_and_confirm(db, qas, boundaries, client, verb_data, debug_cb):
     """Classify all QAs using calibrated signals. Flash confirms boundary cases.
     qas: pre-loaded list of all QAs (passed in to avoid repeated db.get_all() calls)."""
     weights = db.get_all_weights()
     boundary_cases = []
-    margin = 0.10  # 10% boundary zone
-
-    def _get_signal(qa, signal_name):
-        if signal_name == "effective_miss_rate":
-            return db.get_effective_miss_rate(qa["id"])
-        elif signal_name == "cross_topic":
-            topic = qa.get("topic", "")
-            if not topic:
-                return 0
-            rows = db.conn.execute(
-                "SELECT COUNT(*) as cnt FROM topic_links WHERE src_topic = ? OR dst_topic = ?",
-                (topic, topic),
-            ).fetchone()
-            return min(rows["cnt"] / 10, 1.0) if rows else 0
-        elif signal_name == "verb_percentile":
-            verb = qa.get("command_verb", "")
-            if not verb:
-                return None
-            ans_len = len(qa.get("answer_text", ""))
-            # Use pre-loaded qas instead of db.get_all()
-            all_lens = [len(q.get("answer_text", "")) for q in qas if q.get("command_verb", "") == verb]
-            if len(all_lens) < 2:
-                return None
-            rank = sum(1 for l in all_lens if l < ans_len)
-            return rank / len(all_lens)
-        return None
-
-    def _classify(signals):
-        """Return difficulty label and whether it's a boundary case (near threshold)."""
-        votes = {"basic": 0, "intermediate": 0, "advanced": 0}
-        is_boundary = False
-
-        for sig_name, sig_val in signals.items():
-            if sig_val is None:
-                continue
-            bi_key = f"{sig_name}_basic_inter"
-            ia_key = f"{sig_name}_inter_adv"
-            if bi_key in boundaries:
-                mid = boundaries[bi_key]
-                if sig_val < mid * (1 - margin):
-                    votes["basic"] += 1
-                elif sig_val < mid * (1 + margin):
-                    votes["basic"] += 1
-                    is_boundary = True
-                else:
-                    if ia_key in boundaries:
-                        mid2 = boundaries[ia_key]
-                        if sig_val < mid2 * (1 - margin):
-                            votes["intermediate"] += 1
-                        elif sig_val < mid2 * (1 + margin):
-                            votes["intermediate"] += 1
-                            is_boundary = True
-                        else:
-                            votes["advanced"] += 1
-                    else:
-                        votes["intermediate"] += 1
-            elif ia_key in boundaries:
-                mid2 = boundaries[ia_key]
-                if sig_val < mid2 * (1 - margin):
-                    votes["intermediate"] += 1
-                elif sig_val < mid2 * (1 + margin):
-                    votes["intermediate"] += 1
-                    is_boundary = True
-                else:
-                    votes["advanced"] += 1
-            else:
-                votes["intermediate"] += 1  # no boundaries available, default
-
-        if votes["advanced"] > 0:
-            return "advanced", is_boundary
-        elif votes["intermediate"] > 0:
-            return "intermediate", is_boundary
-        elif votes["basic"] > 0:
-            return "basic", is_boundary
-        return "intermediate", False  # default fallback
 
     classification_method = {}
     for qa in qas:
         sigs = {
-            "effective_miss_rate": _get_signal(qa, "effective_miss_rate"),
-            "cross_topic": _get_signal(qa, "cross_topic"),
-            "verb_percentile": _get_signal(qa, "verb_percentile"),
+            "effective_miss_rate": _get_signal(qa, "effective_miss_rate", db, qas),
+            "cross_topic": _get_signal(qa, "cross_topic", db, qas),
+            "verb_percentile": _get_signal(qa, "verb_percentile", db, qas),
         }
         has_signals = any(v is not None for v in sigs.values())
 
@@ -672,7 +681,7 @@ def _phase3_classify_and_confirm(db, qas, boundaries, client, verb_data, debug_c
             classification_method[qa["id"]] = "flash_only"
             continue
 
-        label, is_boundary = _classify(sigs)
+        label, is_boundary = _classify_difficulty(sigs, boundaries)
 
         if is_boundary:
             boundary_cases.append(qa)
@@ -1023,7 +1032,7 @@ def _phase2_postprocess_dependencies(db, validated, debug_cb):
         if (pre, dep) in redundant:
             debug_cb(f"  Transitive reduction: removed {pre}→{dep}")
             continue
-        db.insert_dependency(
+        db.insert_dependency(DependencySpec(
             prerequisite=pre, dependent=dep,
             evidence_score=v["score"],
             evidence_reason=v.get("reason", ""),
@@ -1032,7 +1041,7 @@ def _phase2_postprocess_dependencies(db, validated, debug_cb):
             embedding_cos=v.get("evidence_strength", None) if v["evidence_type"] == "embed_only" else None,
             confidence=v["confidence"],
             validated_by="flash",
-        )
+        ))
         stored += 1
 
     debug_cb(f"  Dependencies stored: {stored} (removed {len(redundant)} transitive)")

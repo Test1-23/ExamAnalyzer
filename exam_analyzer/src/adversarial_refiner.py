@@ -14,12 +14,12 @@ import os
 from .deepseek_client import call_flash
 from .knowledge_base import QADatabase
 from .embedding_cluster import detect_content_lang
+from .models import KPSpec, KpEdgeSpec
 from .logger import get_logger
 
 _log = get_logger()
 
-MAX_ROUNDS = 5
-PASS_THRESHOLD = 2  # consecutive PASS rounds to converge
+from .constants import MAX_ROUNDS, PASS_THRESHOLD
 
 
 def _build_challenger_prompt(kp: dict, qas: list[dict], lang: str, prev_challenges: str = ""):
@@ -174,7 +174,7 @@ def refine_kp(db: QADatabase, kp_id: str, client, debug_cb=None) -> dict:
         )
 
         # Update KP in DB with revised content
-        db.upsert_kp(
+        db.upsert_kp(KPSpec(
             kp_id=kp_id,
             name=kp.get("name", ""),
             description=kp.get("description", ""),
@@ -184,7 +184,7 @@ def refine_kp(db: QADatabase, kp_id: str, client, debug_cb=None) -> dict:
             evidence_count=kp.get("evidence_count", 0),
             quality="accepted",
             challenge_history=json.dumps(history),
-        )
+        ))
 
     # Final quality determination
     # pass_streak >= PASS_THRESHOLD means adversarial review completed cleanly (no issues found)
@@ -198,7 +198,7 @@ def refine_kp(db: QADatabase, kp_id: str, client, debug_cb=None) -> dict:
     else:
         quality = "accepted"
 
-    db.upsert_kp(
+    db.upsert_kp(KPSpec(
         kp_id=kp_id,
         name=kp.get("name", ""),
         description=kp.get("description", ""),
@@ -208,7 +208,7 @@ def refine_kp(db: QADatabase, kp_id: str, client, debug_cb=None) -> dict:
         evidence_count=kp.get("evidence_count", 0),
         quality=quality,
         challenge_history=json.dumps(history),
-    )
+    ))
 
     if debug_cb:
         debug_cb(f"  KP {kp_id}: quality={quality}, rounds={total_rounds}, "
@@ -276,80 +276,6 @@ def cross_kp_consistency(db: QADatabase, kp_ids: list[str], client, debug_cb=Non
     return {"issues": all_issues}
 
 
-def run_adversarial_refinement(db_path: str, api_url: str, api_key: str,
-                               debug_callback=None):
-    """Run adversarial refinement on all draft/accepted KPs.
-    Called after knowledge graph construction."""
-    def _debug(msg):
-        if debug_callback:
-            debug_callback(f"[AR] {msg}")
-        else:
-            print(f"[AR] {msg}")
-
-    _debug("Starting adversarial refinement...")
-
-    db = QADatabase(db_path)
-    kps = db.get_all_kps()
-    if not kps:
-        _debug("No KPs to refine")
-        db.close()
-        return
-
-    from .deepseek_client import create_client
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-    client = create_client(api_url, api_key)
-
-    try:
-        # Only refine draft and accepted KPs (skip already verified and disputed)
-        refine_targets = [k for k in kps if k.get("quality") in ("draft", "accepted", None)]
-        cap = int(os.environ.get("PIPELINE_MAX_WORKERS", "8"))
-        _debug(f"Refining {len(refine_targets)}/{len(kps)} KPs "
-               f"(parallel, max {min(len(refine_targets), cap)} workers)...")
-
-        if refine_targets:
-            def _refine_one(kp):
-                refine_kp(db, kp["id"], client, _debug)
-                return kp["id"]
-
-            max_w = max(1, min(len(refine_targets), cap))
-            with ThreadPoolExecutor(max_workers=max_w) as executor:
-                futures = {executor.submit(_refine_one, kp): kp for kp in refine_targets}
-                for future in as_completed(futures):
-                    try:
-                        future.result()
-                    except Exception as e:
-                        kp = futures[future]
-                        _debug(f"  KP {kp['id']} refinement thread failed: {e}")
-
-        # Cross-KP consistency on verified KPs
-        verified_ids = [k["id"] for k in db.get_all_kps() if k.get("quality") == "verified"]
-        if len(verified_ids) >= 2:
-            _debug(f"Cross-KP consistency check on {len(verified_ids)} verified KPs...")
-            cross_kp_consistency(db, verified_ids, client, _debug)
-
-        # Quality distribution summary
-        final_kps = db.get_all_kps()
-        if final_kps:
-            dist = {}
-            rounds_list = []
-            for k in final_kps:
-                q = k.get("quality", "draft")
-                dist[q] = dist.get(q, 0) + 1
-                try:
-                    history = json.loads(k.get("challenge_history", "") or "[]")
-                    if history:
-                        rounds_list.append(max(h["round"] for h in history))
-                except Exception:
-                    pass
-            dist_str = ", ".join(f"{k}={v}" for k, v in sorted(dist.items()))
-            _debug(f"  [AR] Quality distribution: {dist_str}")
-            if rounds_list:
-                _debug(f"  [AR] Avg rounds per KP: {sum(rounds_list)/len(rounds_list):.1f} "
-                       f"(min={min(rounds_list)}, max={max(rounds_list)})")
-
-        _debug("Adversarial refinement complete")
-    finally:
-        db.close()
 
 
 # ============================================================
@@ -423,10 +349,10 @@ def auto_split_kp(db: QADatabase, kp_id: str, client, debug_cb=None) -> list[str
             continue
         new_id = f"{kp_id}s{len(new_ids)}"
         sub_qa_ids = [int(i) for i in sub.get("qa_ids", []) if isinstance(i, (int, float))]
-        db.upsert_kp(kp_id=new_id, name=f"{kp['name']} ({chr(97+len(new_ids))})",
+        db.upsert_kp(KPSpec(kp_id=new_id, name=f"{kp['name']} ({chr(97+len(new_ids))})",
                      description=sub["concept"], core_concept=sub["concept"],
                      core_detail="", cohesion=kp.get("cohesion"),
-                     evidence_count=len(sub_qa_ids), quality="draft")
+                     evidence_count=len(sub_qa_ids), quality="draft"))
         for qa_id in sub_qa_ids:
             db.conn.execute(
                 "INSERT OR REPLACE INTO qa_kp_membership (qa_id, kp_id, membership_strength) VALUES (?, ?, 0.8)",
@@ -506,7 +432,7 @@ def auto_merge_kps(db: QADatabase, issues: list[dict], debug_cb=None) -> int:
             new_tgt = kp_a if edge["target_kp"] == kp_b else edge["target_kp"]
             if new_src == new_tgt:
                 continue
-            db.upsert_kp_edge(
+            db.upsert_kp_edge(KpEdgeSpec(
                 source_kp=new_src, target_kp=new_tgt,
                 edge_type=edge["edge_type"],
                 retrieval_weight=edge["retrieval_weight"],
@@ -515,7 +441,7 @@ def auto_merge_kps(db: QADatabase, issues: list[dict], debug_cb=None) -> int:
                 learning_path_weight=edge["learning_path_weight"],
                 combined_strength=edge["combined_strength"],
                 confidence=edge["confidence"],
-            )
+            ))
         # Delete B
         db.conn.execute("DELETE FROM knowledge_points WHERE id=?", (kp_b,))
         db.conn.commit()

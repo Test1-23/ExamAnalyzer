@@ -12,9 +12,7 @@ from .logger import get_logger
 
 _log = get_logger()
 
-# ---- Tunable constants ----
-CJK_DETECTION_THRESHOLD = 0.05  # ratio of CJK chars above which text is classified as Chinese
-EMBEDDING_BATCH_SIZE = 64       # batch_size passed to model.encode()
+from .constants import CJK_DETECTION_THRESHOLD, EMBEDDING_BATCH_SIZE
 
 
 # ---------------------------------------------------------------------------

@@ -13,17 +13,16 @@ from collections import defaultdict
 
 from .embedding_cluster import _get_model, MODEL_MAP, _detect_language
 from .logger import get_logger
+from .schema import SCHEMA_DDL, SCHEMA_INDEXES, SCHEMA_MIGRATIONS
+from .models import KPSpec, VerbPatternSpec, KpEdgeSpec, DependencySpec
 
 _log = get_logger()
 
-# ---- Tunable constants ----
-SQLITE_PARAM_CHUNK = 900     # SQLite max bound parameters = 999
-CHANNEL_A_RECALL = 30        # dual-channel: embedding recall size
-BEHAVIOR_CHUNK = 400         # dual-channel: behavior score chunking
-WEIGHT_EMBEDDING = 0.35      # dual-channel: semantic weight
-WEIGHT_TOPIC = 0.35          # dual-channel: topic affiliation weight
-WEIGHT_BEHAVIOR = 0.20       # dual-channel: behavior history weight
-WEIGHT_KEYWORD = 0.10        # dual-channel: keyword match weight
+from .constants import (
+    SQLITE_PARAM_CHUNK,
+    CHANNEL_A_RECALL, BEHAVIOR_CHUNK,
+    WEIGHT_EMBEDDING, WEIGHT_TOPIC, WEIGHT_BEHAVIOR, WEIGHT_KEYWORD,
+)
 
 
 # ============================================================
@@ -61,379 +60,10 @@ class QADatabase:
         return self._conn
 
     def _init_tables(self):
-        self.conn.executescript("""
-            CREATE TABLE IF NOT EXISTS qa_pairs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                question_text TEXT NOT NULL,
-                answer_text TEXT NOT NULL,
-                knowledge_summary TEXT NOT NULL DEFAULT '',
-                topic TEXT NOT NULL DEFAULT '',
-                paper TEXT NOT NULL DEFAULT '',
-                question_number TEXT NOT NULL DEFAULT '',
-                parent_question TEXT NOT NULL DEFAULT '',
-                success_count INTEGER DEFAULT 0,
-                total_attempts INTEGER DEFAULT 0,
-                last_failure_reason TEXT DEFAULT '',
-                created_at TEXT DEFAULT (datetime('now'))
-            );
-
-            CREATE TABLE IF NOT EXISTS api_call_log (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                stage TEXT NOT NULL,
-                model TEXT NOT NULL,
-                paper TEXT DEFAULT '',
-                question_number TEXT DEFAULT '',
-                latency_ms INTEGER DEFAULT 0,
-                success INTEGER DEFAULT 1,
-                output_size INTEGER DEFAULT 0,
-                created_at TEXT DEFAULT (datetime('now'))
-            );
-
-            CREATE TABLE IF NOT EXISTS question_feedback (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                qa_id INTEGER REFERENCES qa_pairs(id),
-                retrieval_count INTEGER DEFAULT 0,
-                used_qa_count INTEGER DEFAULT 0,
-                step0_topic TEXT DEFAULT '',
-                round2_topic TEXT DEFAULT '',
-                topic_match INTEGER DEFAULT 0,
-                covered_count INTEGER DEFAULT 0,
-                missed_count INTEGER DEFAULT 0,
-                missed_text TEXT DEFAULT '',
-                coverage_ratio REAL DEFAULT 0.0,
-                created_at TEXT DEFAULT (datetime('now'))
-            );
-
-            CREATE TABLE IF NOT EXISTS topic_links (
-                src_topic TEXT NOT NULL,
-                dst_topic TEXT NOT NULL,
-                count INTEGER DEFAULT 1,
-                PRIMARY KEY (src_topic, dst_topic)
-            );
-
-            CREATE TABLE IF NOT EXISTS exam_sessions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                subject_code TEXT NOT NULL,
-                season TEXT NOT NULL,
-                year INTEGER NOT NULL,
-                display_name TEXT NOT NULL,
-                UNIQUE(subject_code, season, year, display_name)
-            );
-
-            CREATE TABLE IF NOT EXISTS student_memory (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                student_id TEXT NOT NULL,
-                memory_type TEXT NOT NULL,
-                topic TEXT NOT NULL,
-                content TEXT NOT NULL,
-                confidence REAL DEFAULT 0.5,
-                created_at TEXT DEFAULT (datetime('now')),
-                last_recalled_at TEXT
-            );
-
-            CREATE TABLE IF NOT EXISTS student_knowledge_state (
-                student_id TEXT NOT NULL,
-                topic TEXT NOT NULL,
-                state TEXT NOT NULL,
-                evidence_count INTEGER DEFAULT 0,
-                updated_at TEXT DEFAULT (datetime('now')),
-                PRIMARY KEY (student_id, topic)
-            );
-
-            CREATE TABLE IF NOT EXISTS confusion_events (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                student_id TEXT NOT NULL,
-                topic TEXT NOT NULL,
-                trigger_question TEXT,
-                confusion_type TEXT,
-                resolved BOOLEAN DEFAULT 0,
-                created_at TEXT DEFAULT (datetime('now'))
-            );
-
-            CREATE TABLE IF NOT EXISTS chat_history (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id TEXT NOT NULL,
-                role TEXT NOT NULL,
-                content TEXT NOT NULL,
-                sources TEXT DEFAULT '',
-                created_at TEXT DEFAULT (datetime('now'))
-            );
-
-            CREATE TABLE IF NOT EXISTS topic_dependencies (
-                prerequisite TEXT NOT NULL,
-                dependent TEXT NOT NULL,
-                evidence_score INTEGER,
-                evidence_reason TEXT,
-                relationship_type TEXT DEFAULT 'prerequisite',
-                topic_link_count INTEGER DEFAULT 0,
-                embedding_cos REAL,
-                confidence TEXT DEFAULT 'low',
-                validated_at TEXT,
-                first_seen_at TEXT DEFAULT (datetime('now')),
-                last_validated_at TEXT,
-                validated_by TEXT DEFAULT 'flash',
-                PRIMARY KEY (prerequisite, dependent)
-            );
-
-            CREATE TABLE IF NOT EXISTS command_verb_patterns (
-                verb TEXT PRIMARY KEY,
-                sample_count INTEGER DEFAULT 0,
-                avg_answer_length REAL,
-                median_answer_length REAL,
-                bullet_ratio REAL,
-                avg_bullet_count REAL,
-                avg_miss_rate REAL,
-                common_missed_patterns TEXT,
-                pattern_summary TEXT,
-                topic_specific_patterns TEXT,
-                verb_family TEXT,
-                generated_at TEXT DEFAULT (datetime('now')),
-                last_updated TEXT
-            );
-
-            CREATE TABLE IF NOT EXISTS topic_difficulty (
-                topic TEXT PRIMARY KEY,
-                qa_count INTEGER DEFAULT 0,
-                basic_count INTEGER DEFAULT 0,
-                intermediate_count INTEGER DEFAULT 0,
-                advanced_count INTEGER DEFAULT 0,
-                mode_difficulty TEXT,
-                avg_miss_rate REAL,
-                difficulty_spread BOOLEAN DEFAULT 0,
-                assessed_at TEXT,
-                assessment_method TEXT DEFAULT 'hybrid'
-            );
-
-            CREATE TABLE IF NOT EXISTS analysis_checkpoints (
-                task_name TEXT PRIMARY KEY,
-                qa_count_at_run INTEGER,
-                completed_at TEXT,
-                status TEXT DEFAULT 'pending'
-            );
-
-            CREATE TABLE IF NOT EXISTS knowledge_points (
-                id TEXT PRIMARY KEY,
-                cluster_id INTEGER,
-                name TEXT,
-                description TEXT,
-                centroid_vector BLOB,
-                core_concept TEXT,
-                core_detail TEXT,
-                variations TEXT,
-                scoring_pattern TEXT,
-                typical_marks REAL,
-                cohesion REAL,
-                evidence_count INTEGER DEFAULT 0,
-                quality TEXT DEFAULT 'draft',
-                challenge_history TEXT,
-                first_seen_at TEXT DEFAULT (datetime('now')),
-                last_validated_at TEXT,
-                created_at TEXT DEFAULT (datetime('now'))
-            );
-
-            CREATE TABLE IF NOT EXISTS kp_edges (
-                source_kp TEXT REFERENCES knowledge_points(id),
-                target_kp TEXT REFERENCES knowledge_points(id),
-                edge_type TEXT,
-                retrieval_weight REAL,
-                semantic_weight REAL,
-                sequential_weight REAL,
-                learning_path_weight REAL,
-                combined_strength REAL,
-                confidence TEXT DEFAULT 'low',
-                PRIMARY KEY (source_kp, target_kp, edge_type)
-            );
-
-            CREATE TABLE IF NOT EXISTS qa_kp_membership (
-                qa_id INTEGER REFERENCES qa_pairs(id),
-                kp_id TEXT REFERENCES knowledge_points(id),
-                membership_strength REAL,
-                is_representative BOOLEAN DEFAULT 0,
-                PRIMARY KEY (qa_id, kp_id)
-            );
-
-            CREATE TABLE IF NOT EXISTS student_trajectory (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                student_id TEXT NOT NULL,
-                kp_id TEXT REFERENCES knowledge_points(id),
-                from_state TEXT,
-                to_state TEXT,
-                trigger TEXT,
-                recorded_at TEXT DEFAULT (datetime('now'))
-            );
-
-            CREATE TABLE IF NOT EXISTS exam_trends (
-                kp_id TEXT REFERENCES knowledge_points(id),
-                year INTEGER,
-                season TEXT,
-                occurrence_count INTEGER DEFAULT 0,
-                avg_difficulty TEXT,
-                trend_summary TEXT,
-                PRIMARY KEY (kp_id, year, season)
-            );
-
-            CREATE TABLE IF NOT EXISTS paper_signatures (
-                display_name TEXT PRIMARY KEY,
-                qa_count INTEGER,
-                topic_count INTEGER,
-                verb_dist TEXT,
-                difficulty_dist TEXT,
-                avg_miss_rate REAL,
-                avg_answer_length REAL,
-                topic_purity_avg REAL,
-                anomaly_flags TEXT,
-                extracted_at TEXT DEFAULT (datetime('now'))
-            );
-
-            CREATE TABLE IF NOT EXISTS dimension_baselines (
-                dimension TEXT PRIMARY KEY,
-                mean REAL,
-                median REAL,
-                mad REAL,
-                sample_count INTEGER,
-                last_updated TEXT
-            );
-
-            CREATE TABLE IF NOT EXISTS diversity_signals (
-                display_name TEXT,
-                step TEXT,
-                signal_name TEXT,
-                signal_value REAL,
-                normal_range TEXT,
-                is_anomaly BOOLEAN DEFAULT 0,
-                recorded_at TEXT DEFAULT (datetime('now')),
-                PRIMARY KEY (display_name, step, signal_name)
-            );
-
-            CREATE TABLE IF NOT EXISTS calibration_checks (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                check_type TEXT,
-                step TEXT,
-                qa_id INTEGER,
-                system_output TEXT,
-                system_confidence REAL,
-                check_result TEXT,
-                was_calibrated BOOLEAN,
-                checked_at TEXT DEFAULT (datetime('now'))
-            );
-
-            CREATE TABLE IF NOT EXISTS correction_rules (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                step TEXT,
-                anomaly_pattern TEXT,
-                correction_action TEXT,
-                times_triggered INTEGER DEFAULT 0,
-                success_rate REAL,
-                last_triggered TEXT
-            );
-
-            CREATE TABLE IF NOT EXISTS distillation_cache (
-                topic TEXT PRIMARY KEY,
-                qa_count INTEGER NOT NULL DEFAULT 0,
-                qa_ids_hash TEXT NOT NULL DEFAULT '',
-                distilled_content TEXT NOT NULL DEFAULT '',
-                distilled_at TEXT DEFAULT (datetime('now'))
-            );
-
-            CREATE TABLE IF NOT EXISTS evolution_history (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                kp_id TEXT REFERENCES knowledge_points(id),
-                trigger_type TEXT NOT NULL,
-                trigger_detail TEXT,
-                old_state TEXT,
-                new_state TEXT,
-                outcome TEXT DEFAULT 'pending',
-                created_at TEXT DEFAULT (datetime('now'))
-            );
-
-            -- Phase 1: MS Fragment extraction + behavior data
-            CREATE TABLE IF NOT EXISTS ms_fragments (
-                point_id TEXT PRIMARY KEY,
-                qa_id INTEGER REFERENCES qa_pairs(id),
-                point_text TEXT NOT NULL,
-                marks INTEGER DEFAULT 1,
-                created_at TEXT DEFAULT (datetime('now'))
-            );
-
-            CREATE TABLE IF NOT EXISTS fragment_help_map (
-                fragment_id TEXT REFERENCES ms_fragments(point_id),
-                helped_qa_id INTEGER REFERENCES qa_pairs(id),
-                help_effect REAL DEFAULT 0,
-                help_level TEXT DEFAULT '',
-                PRIMARY KEY (fragment_id, helped_qa_id)
-            );
-
-            CREATE TABLE IF NOT EXISTS fragment_membership (
-                fragment_id TEXT PRIMARY KEY REFERENCES ms_fragments(point_id),
-                topic_id TEXT NOT NULL,
-                loyalty REAL DEFAULT 0.5,
-                joined_at TEXT DEFAULT (datetime('now')),
-                previous_topic_id TEXT
-            );
-
-            CREATE TABLE IF NOT EXISTS dynamic_topics (
-                topic_id TEXT PRIMARY KEY,
-                name TEXT DEFAULT '',
-                mass INTEGER DEFAULT 0,
-                cohesion REAL DEFAULT 0,
-                stability REAL DEFAULT 0,
-                behavioral_profile TEXT DEFAULT '{}',
-                quality TEXT DEFAULT 'embryonic',
-                parent_topic TEXT,
-                child_topics TEXT DEFAULT '[]',
-                merged_from TEXT DEFAULT '[]',
-                kp_concept TEXT DEFAULT '',
-                kp_detail TEXT DEFAULT '',
-                created_at TEXT DEFAULT (datetime('now')),
-                last_evolved_at TEXT
-            );
-
-            -- Phase 5: LLM-driven vector space infrastructure
-            CREATE TABLE IF NOT EXISTS fragment_centrality (
-                fragment_id TEXT PRIMARY KEY REFERENCES ms_fragments(point_id),
-                verification_count INTEGER DEFAULT 0,
-                avg_help_score REAL DEFAULT 0,
-                topic_coherence REAL DEFAULT 0,
-                variance REAL DEFAULT 0,
-                centrality_score REAL DEFAULT 0.2,
-                updated_at TEXT DEFAULT (datetime('now'))
-            );
-
-            CREATE TABLE IF NOT EXISTS kp_vectors (
-                kp_id TEXT PRIMARY KEY REFERENCES knowledge_points(id),
-                vector BLOB NOT NULL,
-                adjustment_count INTEGER DEFAULT 0,
-                stability REAL DEFAULT 1.0,
-                updated_at TEXT DEFAULT (datetime('now'))
-            );
-
-            CREATE TABLE IF NOT EXISTS qa_kp_scores (
-                qa_id INTEGER REFERENCES qa_pairs(id),
-                kp_id TEXT REFERENCES knowledge_points(id),
-                relevance_score REAL NOT NULL,
-                created_at TEXT DEFAULT (datetime('now')),
-                PRIMARY KEY (qa_id, kp_id)
-            );
-
-            CREATE TABLE IF NOT EXISTS topic_vectors (
-                topic_id TEXT PRIMARY KEY REFERENCES dynamic_topics(topic_id),
-                vector BLOB NOT NULL,
-                member_kp_count INTEGER DEFAULT 0,
-                updated_at TEXT DEFAULT (datetime('now'))
-            );
-        """)
-        self.conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_qa_dedup ON qa_pairs(question_text, answer_text)"
-        )
-        self.conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_chat_session ON chat_history(session_id, created_at)"
-        )
-        self.conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_dep_prereq ON topic_dependencies(prerequisite)"
-        )
-        self.conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_dep_dep ON topic_dependencies(dependent)"
-        )
+        for _name, ddl in SCHEMA_DDL:
+            self.conn.execute(ddl)
+        for idx_ddl in SCHEMA_INDEXES:
+            self.conn.execute(idx_ddl)
         self.conn.commit()
         self._run_migrations()
 
@@ -447,26 +77,7 @@ class QADatabase:
             "SELECT COALESCE(MAX(version), 0) as v FROM schema_version"
         ).fetchone()["v"]
 
-        migrations = [
-            (1, "qa_pairs metadata columns", [
-                "ALTER TABLE qa_pairs ADD COLUMN session_id INTEGER REFERENCES exam_sessions(id)",
-                "ALTER TABLE qa_pairs ADD COLUMN is_representative BOOLEAN DEFAULT 0",
-                "ALTER TABLE qa_pairs ADD COLUMN is_cross_topic BOOLEAN DEFAULT 0",
-                "ALTER TABLE qa_pairs ADD COLUMN difficulty_estimate TEXT DEFAULT ''",
-                "ALTER TABLE qa_pairs ADD COLUMN command_verb TEXT DEFAULT ''",
-                "ALTER TABLE qa_pairs ADD COLUMN command_verb_secondary TEXT DEFAULT ''",
-                "ALTER TABLE qa_pairs ADD COLUMN command_verb_inferred BOOLEAN DEFAULT 0",
-                "ALTER TABLE qa_pairs ADD COLUMN last_failure_reason TEXT DEFAULT ''",
-            ]),
-            (2, "question_feedback metadata", [
-                "ALTER TABLE question_feedback ADD COLUMN miss_categories TEXT DEFAULT ''",
-            ]),
-            (3, "Phase 5: fragment_help_map help_level + vector infrastructure", [
-                "ALTER TABLE fragment_help_map ADD COLUMN help_level TEXT DEFAULT ''",
-            ]),
-        ]
-
-        for version, description, statements in migrations:
+        for version, description, statements in SCHEMA_MIGRATIONS:
             if version <= current:
                 continue
             for stmt in statements:
@@ -1054,18 +665,13 @@ class QADatabase:
 
     # ---- Topic dependencies ----
 
-    def insert_dependency(self, prerequisite: str, dependent: str,
-                          evidence_score: int = 0, evidence_reason: str = "",
-                          relationship_type: str = "prerequisite",
-                          topic_link_count: int = 0, embedding_cos: float = None,
-                          confidence: str = "low", validated_by: str = "flash"):
+    def insert_dependency(self, spec: DependencySpec):
         with self._write_lock:
             existing = self.conn.execute(
                 "SELECT first_seen_at FROM topic_dependencies WHERE prerequisite = ? AND dependent = ?",
-                (prerequisite, dependent),
+                (spec.prerequisite, spec.dependent),
             ).fetchone()
             if existing:
-                # Update without touching first_seen_at
                 self.conn.execute(
                     """UPDATE topic_dependencies SET
                        evidence_score = ?, evidence_reason = ?,
@@ -1075,9 +681,9 @@ class QADatabase:
                        last_validated_at = datetime('now'),
                        validated_by = ?
                        WHERE prerequisite = ? AND dependent = ?""",
-                    (evidence_score, evidence_reason, relationship_type,
-                     topic_link_count, embedding_cos, confidence, validated_by,
-                     prerequisite, dependent),
+                    (spec.evidence_score, spec.evidence_reason, spec.relationship_type,
+                     spec.topic_link_count, spec.embedding_cos, spec.confidence, spec.validated_by,
+                     spec.prerequisite, spec.dependent),
                 )
             else:
                 self.conn.execute(
@@ -1086,9 +692,9 @@ class QADatabase:
                         relationship_type, topic_link_count, embedding_cos,
                         confidence, validated_at, first_seen_at, last_validated_at, validated_by)
                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'), datetime('now'), ?)""",
-                    (prerequisite, dependent, evidence_score, evidence_reason,
-                     relationship_type, topic_link_count, embedding_cos,
-                     confidence, validated_by),
+                    (spec.prerequisite, spec.dependent, spec.evidence_score, spec.evidence_reason,
+                     spec.relationship_type, spec.topic_link_count, spec.embedding_cos,
+                     spec.confidence, spec.validated_by),
                 )
             self.conn.commit()
 
@@ -1154,16 +760,7 @@ class QADatabase:
 
     # ---- Command verb patterns ----
 
-    def upsert_verb_pattern(self, verb: str, sample_count: int = 0,
-                            avg_answer_length: float = None,
-                            median_answer_length: float = None,
-                            bullet_ratio: float = None,
-                            avg_bullet_count: float = None,
-                            avg_miss_rate: float = None,
-                            common_missed_patterns: str = "",
-                            pattern_summary: str = "",
-                            topic_specific_patterns: str = "",
-                            verb_family: str = ""):
+    def upsert_verb_pattern(self, spec: VerbPatternSpec):
         with self._write_lock:
             self.conn.execute(
                 """INSERT OR REPLACE INTO command_verb_patterns
@@ -1172,10 +769,10 @@ class QADatabase:
                     common_missed_patterns, pattern_summary,
                     topic_specific_patterns, verb_family, last_updated)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))""",
-                (verb, sample_count, avg_answer_length, median_answer_length,
-                 bullet_ratio, avg_bullet_count, avg_miss_rate,
-                 common_missed_patterns, pattern_summary,
-                 topic_specific_patterns, verb_family),
+                (spec.verb, spec.sample_count, spec.avg_answer_length, spec.median_answer_length,
+                 spec.bullet_ratio, spec.avg_bullet_count, spec.avg_miss_rate,
+                 spec.common_missed_patterns, spec.pattern_summary,
+                 spec.topic_specific_patterns, spec.verb_family),
             )
             self.conn.commit()
 
@@ -1294,16 +891,10 @@ class QADatabase:
 
     # ---- Knowledge Points (KP graph) ----
 
-    def upsert_kp(self, kp_id: str, name: str = "", description: str = "",
-                  cluster_id: int = None, centroid_vector: bytes = None,
-                  core_concept: str = "", core_detail: str = "",
-                  variations: str = "", scoring_pattern: str = "",
-                  typical_marks: float = None, cohesion: float = None,
-                  evidence_count: int = 0, quality: str = "draft",
-                  challenge_history: str = ""):
+    def upsert_kp(self, spec: KPSpec):
         with self._write_lock:
             existing = self.conn.execute(
-                "SELECT id FROM knowledge_points WHERE id = ?", (kp_id,)
+                "SELECT id FROM knowledge_points WHERE id = ?", (spec.kp_id,)
             ).fetchone()
             if existing:
                 self.conn.execute(
@@ -1314,10 +905,10 @@ class QADatabase:
                        quality=?, challenge_history=?,
                        last_validated_at=datetime('now')
                        WHERE id=?""",
-                    (name, description, cluster_id, centroid_vector,
-                     core_concept, core_detail, variations, scoring_pattern,
-                     typical_marks, cohesion, evidence_count, quality,
-                     challenge_history, kp_id),
+                    (spec.name, spec.description, spec.cluster_id, spec.centroid_vector,
+                     spec.core_concept, spec.core_detail, spec.variations, spec.scoring_pattern,
+                     spec.typical_marks, spec.cohesion, spec.evidence_count, spec.quality,
+                     spec.challenge_history, spec.kp_id),
                 )
             else:
                 self.conn.execute(
@@ -1327,10 +918,10 @@ class QADatabase:
                         typical_marks, cohesion, evidence_count, quality,
                         challenge_history)
                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (kp_id, name, description, cluster_id, centroid_vector,
-                     core_concept, core_detail, variations, scoring_pattern,
-                     typical_marks, cohesion, evidence_count, quality,
-                     challenge_history),
+                    (spec.kp_id, spec.name, spec.description, spec.cluster_id, spec.centroid_vector,
+                     spec.core_concept, spec.core_detail, spec.variations, spec.scoring_pattern,
+                     spec.typical_marks, spec.cohesion, spec.evidence_count, spec.quality,
+                     spec.challenge_history),
                 )
             self.conn.commit()
 
@@ -1368,10 +959,7 @@ class QADatabase:
 
     # ---- KP Edges ----
 
-    def upsert_kp_edge(self, source_kp: str, target_kp: str, edge_type: str,
-                       retrieval_weight: float = 0, semantic_weight: float = 0,
-                       sequential_weight: float = 0, learning_path_weight: float = 0,
-                       combined_strength: float = 0, confidence: str = "low"):
+    def upsert_kp_edge(self, spec: KpEdgeSpec):
         with self._write_lock:
             self.conn.execute(
                 """INSERT OR REPLACE INTO kp_edges
@@ -1379,9 +967,9 @@ class QADatabase:
                     semantic_weight, sequential_weight, learning_path_weight,
                     combined_strength, confidence)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (source_kp, target_kp, edge_type, retrieval_weight,
-                 semantic_weight, sequential_weight, learning_path_weight,
-                 combined_strength, confidence),
+                (spec.source_kp, spec.target_kp, spec.edge_type, spec.retrieval_weight,
+                 spec.semantic_weight, spec.sequential_weight, spec.learning_path_weight,
+                 spec.combined_strength, spec.confidence),
             )
             self.conn.commit()
 
@@ -1619,7 +1207,7 @@ class QARetriever:
         query_vec = model.encode([query], normalize_embeddings=True, convert_to_numpy=True)[0]
         scores = np.dot(self._embeddings, query_vec)
 
-        channel_a_size = min(len(scores), 30)
+        channel_a_size = min(len(scores), CHANNEL_A_RECALL)
         top_a = np.argpartition(-scores, channel_a_size - 1)[:channel_a_size]
         top_a = top_a[np.argsort(-scores[top_a])]
 

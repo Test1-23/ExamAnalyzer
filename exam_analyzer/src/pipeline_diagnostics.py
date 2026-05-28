@@ -9,19 +9,18 @@ import json
 import statistics
 import numpy as np
 
-from .deepseek_client import call_flash, create_client
+from .deepseek_client import create_client
 from .knowledge_base import QADatabase
 from .embedding_cluster import _get_model, TOPIC_EMBED_MODEL
+from .models import KPSpec
 from .logger import get_logger
 
 _log = get_logger()
 
-# ---- Tunable constants ----
-ANOMALY_ZSCORE_SINGLE = 3.0   # single dimension anomaly threshold
-ANOMALY_ZSCORE_SYSTEMIC = 2.0  # systemic anomaly threshold
-SYSTEMIC_DIMENSION_COUNT = 3   # number of dimensions above threshold for systemic anomaly
-DIFFICULTY_HARD_THRESHOLD = 2.0
-DIFFICULTY_EASY_THRESHOLD = 1.3
+from .constants import (
+    ANOMALY_ZSCORE_SINGLE, ANOMALY_ZSCORE_SYSTEMIC, SYSTEMIC_DIMENSION_COUNT,
+    DIFFICULTY_HARD_THRESHOLD, DIFFICULTY_EASY_THRESHOLD,
+)
 
 
 def auto_discover_pitfalls(db: QADatabase, kp_id: str, debug_cb=None) -> list[dict]:
@@ -66,13 +65,13 @@ def auto_discover_pitfalls(db: QADatabase, kp_id: str, debug_cb=None) -> list[di
             except (json.JSONDecodeError, TypeError):
                 var_dict = {}
             var_dict["pitfalls"] = patterns[:5]
-            db.upsert_kp(
+            db.upsert_kp(KPSpec(
                 kp_id=kp_id, name=kp.get("name", ""), description=kp.get("description", ""),
                 core_concept=kp.get("core_concept", ""), core_detail=kp.get("core_detail", ""),
                 variations=json.dumps(var_dict),
                 cohesion=kp.get("cohesion"), evidence_count=kp.get("evidence_count", 0),
                 quality=kp.get("quality", "draft"),
-            )
+            ))
     if debug_cb and patterns:
         top = patterns[0]
         debug_cb(f"  [DX] KP {kp_id}: {len(patterns)} pitfalls "
@@ -80,7 +79,7 @@ def auto_discover_pitfalls(db: QADatabase, kp_id: str, debug_cb=None) -> list[di
     return patterns
 
 
-def compute_exam_trends(db: QADatabase, client, debug_cb=None) -> int:
+def compute_exam_trends(db: QADatabase, debug_cb=None) -> int:
     """Compute exam trends for all KPs with >= 2 years of data."""
     kps = db.get_all_kps()
     if not kps:
@@ -380,7 +379,7 @@ def run_closed_loop(db_path: str, api_url: str, api_key: str, debug_callback=Non
     try:
         pitfall_count = sum(1 for kp in kps if auto_discover_pitfalls(db, kp["id"], _debug))
         _debug(f"Auto-pitfalls: {pitfall_count} KPs updated")
-        compute_exam_trends(db, client, _debug)
+        compute_exam_trends(db, _debug)
         _debug("Closed-loop improvements complete")
     finally:
         db.close()

@@ -7,7 +7,7 @@ from ``detect_content_lang(**kwargs.get('lang_source', ''))``.
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from typing import Any
 
 from .embedding_cluster import detect_content_lang
 
@@ -50,25 +50,6 @@ class PromptTemplate:
 # Pre-defined templates — one per semantic intent
 # ============================================================
 
-SUMMARY = PromptTemplate(
-    en_system="You are an exam knowledge classifier. Do two things. Output JSON. "
-              "1. Describe the core concept tested in 1-2 sentences. "
-              "2. Assign a concise topic name.",
-    zh_system="你是一个考试知识分类专家。同时完成两件事。Output JSON."
-              "1. 用1-2句描述这道题考察的核心技术概念"
-              "2. 分配一个简洁的主题名称",
-    en_user=("Question: {question_text}\n\nAnswer: {answer_text}\n\n"
-             "{topic_hint}"
-             "Do not mention question-specific context (values, filenames, scenarios, names).\n"
-             "Use standard terminology for topic names (e.g. 'Data Compression').\n"
-             'Return JSON: {{"summary": "core concept description", "topic": "Topic Name"}}'),
-    zh_user=("题目: {question_text}\n\n答案: {answer_text}\n\n"
-             "{topic_hint}"
-             "不要提及题目特定上下文（具体数值、文件名、场景描述、人名）。\n"
-             "主题名称应使用标准术语（如 'Data Compression', 'Interrupt Handling'）。\n"
-             '返回 JSON: {{"summary": "核心知识描述", "topic": "标准主题名"}}'),
-)
-
 FRAGMENT = PromptTemplate(
     en_system="You are an exam marking expert. Split the given mark scheme answer "
               "into individual scoring points. Output JSON.",
@@ -100,39 +81,6 @@ QA_CLASSIFY = PromptTemplate(
              "对每个KPi评分:\n"
              "1.0 = 核心考察\n0.5 = 间接涉及\n0.0 = 无关\n"
              '返回 JSON: {{"kp_scores": {{"kp_id": 1.0, ...}}}}'),
-)
-
-ANSWER = PromptTemplate(
-    en_system="You are a knowledgeable tutor. "
-              "Use the provided references for accuracy; never guess. "
-              "Answer clearly. Output JSON.",
-    zh_system="你是一个知识渊博的辅导老师。"
-              "利用提供的参考资料确保准确性；不要猜测。"
-              "清晰地回答。Output JSON。",
-    en_user=("References:\n{references}\n\n"
-             "Question: {question}\n\n"
-             'Return JSON: {{"answer": "your answer", '
-             '"used_qa_indices": [], "r2_topic": ""}}'),
-    zh_user=("参考资料:\n{references}\n\n"
-             "问题: {question}\n\n"
-             '返回 JSON: {{"answer": "你的回答", '
-             '"used_qa_indices": [], "r2_topic": ""}}'),
-)
-
-GRADE = PromptTemplate(
-    en_system="You are a strict exam grader. Compare the student's answer against "
-              "the mark scheme. Output JSON.",
-    zh_system="你是一个严格的考试评分员。将学生答案与评分标准逐项比对。Output JSON。",
-    en_user=("Mark scheme (ground truth):\n{answer_text}\n\n"
-             "Student answer to grade:\n{student_answer}\n\n"
-             "1. List covered points (student got right)\n"
-             '2. List missed points: {{"point": "...", "reason": "knowledge_gap|misinterpretation|insufficient_detail|retrieval_quality"}}\n'
-             'Return JSON: {{"covered_points": [...], "missed_points": [...]}}'),
-    zh_user=("评分标准（标准答案）:\n{answer_text}\n\n"
-             "待评分的学生答案:\n{student_answer}\n\n"
-             "1. 列出已覆盖的得分点\n"
-             '2. 列出遗漏的得分点: {{"point": "...", "reason": "knowledge_gap|misinterpretation|insufficient_detail|retrieval_quality"}}\n'
-             '返回 JSON: {{"covered_points": [...], "missed_points": [...]}}'),
 )
 
 QUERY_ANALYST = PromptTemplate(
