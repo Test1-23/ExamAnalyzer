@@ -1473,6 +1473,66 @@ def _distill_points(db: QADatabase, client, debug: Callable) -> str:
 
 
 # ============================================================
+# Phase 2: KP generation for stable topics
+# ============================================================
+
+def _generate_kp_for_stable_topics(db: QADatabase, client, debug: Callable):
+    """Generate KP text for topics that reached 'forming' quality via Flash."""
+    topics = db.conn.execute(
+        "SELECT * FROM dynamic_topics WHERE quality='forming'"
+    ).fetchall()
+    if not topics:
+        return
+
+    debug(f"Phase 2: generating KP for {len(topics)} forming topics")
+
+    for topic in topics:
+        topic_id = topic["topic_id"]
+        frags = db.get_topic_fragments(topic_id)
+        if not frags:
+            continue
+
+        # Collect fragment texts
+        frag_texts = db.conn.execute(
+            "SELECT point_text FROM ms_fragments WHERE point_id IN ({})".format(
+                ",".join("?" * len(frags))),
+            frags
+        ).fetchall()
+        texts = [r["point_text"] for r in frag_texts]
+        combined = "\n".join(f"- {t}" for t in texts[:20])
+
+        lang = detect_content_lang(combined[:2000])
+
+        if lang == 'en':
+            sys = ("You are a knowledge distillation expert. These MS scoring points "
+                   "were found by the system to help answer the same set of questions. "
+                   "Name and explain the concept they describe. Output JSON.")
+            usr = (f"MS scoring points (all test the same concept):\n{combined}\n\n"
+                   "1. Name this concept (1 sentence)\n"
+                   "2. Explain key details (2-3 sentences, based ONLY on the points above)\n"
+                   'Return JSON: {"concept": "...", "detail": "..."}')
+        else:
+            sys = ("这些MS得分点被系统发现可互相帮助答题。请命名并解释它们描述的概念。Output JSON。")
+            usr = (f"MS得分点（考查同一概念）:\n{combined}\n\n"
+                   "1. 命名此概念（一句话）\n"
+                   "2. 解释关键细节（2-3句，仅基于以上得分点）\n"
+                   '返回 JSON: {"concept": "...", "detail": "..."}')
+
+        messages = [{"role": "system", "content": sys}, {"role": "user", "content": usr}]
+        try:
+            result = call_flash(client, messages, max_retries=1, debug_callback=debug)
+            concept = result.get("concept", topic["name"]) if isinstance(result, dict) else topic["name"]
+            detail = result.get("detail", "") if isinstance(result, dict) else ""
+        except Exception as e:
+            debug(f"  KP generation failed for {topic_id}: {e}")
+            concept = topic["name"]
+            detail = ""
+
+        db.set_topic_kp(topic_id, concept, detail)
+        debug(f"  KP generated: [{topic_id}] {concept[:80]}")
+
+
+# ============================================================
 # Self-evolving loop
 # ============================================================
 
@@ -1482,6 +1542,21 @@ def _run_evolution_cycle(db: QADatabase, client, debug: Callable):
     Observes changes since last analysis, generates improvement proposals,
     and auto-accepts low-risk refinements.
     """
+    # -- Phase 2: Fragment migration + topic stats --
+    try:
+        from .pipeline_diagnostics import run_phase2_cycle
+        result = run_phase2_cycle(db_path, debug_cb=debug)
+        if result.get("migrated", 0) > 0:
+            debug(f"Evolution: {result['migrated']} fragments migrated")
+    except Exception as e:
+        debug(f"  Phase 2 cycle failed (non-fatal): {e}")
+
+    # -- Phase 2: Generate KP for stable/forming topics --
+    try:
+        _generate_kp_for_stable_topics(db, client, debug)
+    except Exception as e:
+        debug(f"  KP generation for stable topics failed (non-fatal): {e}")
+
     kps = db.conn.execute("SELECT * FROM knowledge_points").fetchall()
     if not kps:
         return
