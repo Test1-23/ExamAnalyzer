@@ -1,0 +1,32 @@
+[project]
+name = "exam-analyzer"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+    "openai>=1.0.0",
+    "PyMuPDF>=1.23.0",
+    "flask>=2.3.0",
+    "pdfplumber>=0.10.0",
+    "sentence-transformers>=2.0.0",
+    "numpy",
+    "requests",
+]
+
+[project.optional-dependencies]
+dev = ["ruff", "mypy", "pytest", "pytest-mock"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP", "B", "C4", "SIM"]
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+warn_return_any = true
+warn_unused_configs = true
+
+[tool.pytest.ini_options]
+testpaths = ["exam_analyzer/tests"]

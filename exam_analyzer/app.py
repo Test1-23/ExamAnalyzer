@@ -11,6 +11,7 @@ from flask import Flask, request, jsonify, render_template
 from src.logger import get_logger
 from src.deepseek_client import create_client, call_flash
 from src.embedding_cluster import detect_content_lang
+from src.config import load_config
 
 _log = get_logger()
 
@@ -74,7 +75,7 @@ def _warmup_chat_retriever():
         try:
             _get_chat_retriever()  # model loads inside rebuild()
         except Exception:
-            pass
+            _log.debug("Chat retriever warmup failed (non-critical)", exc_info=True)
     t = threading.Thread(target=_warmup, daemon=True)
     t.start()
 
@@ -97,13 +98,13 @@ def _get_chat_retriever():
         retriever.rebuild()
         _chat_retriever = retriever
         _chat_retriever_db_path = db_path
-        _kp_cache = _load_kp_cache(db)
+        _kp_cache = load_kp_cache(db, points_file=_find_points_file())
         source = "points.txt" if _kp_cache and any(k.get("pitfall") for k in _kp_cache[:3]) else "DB"
         print(f"[Chat] KP cache loaded: {len(_kp_cache)} entries (source: {source})")
     return retriever
 
 
-def _load_kp_from_db(db) -> list[dict]:
+def load_kp_from_db(db) -> list[dict]:
     """Read KP data from DB: Dynamic_Topics (priority) + qa_pairs (fallback)."""
     kps = []
     try:
@@ -123,7 +124,7 @@ def _load_kp_from_db(db) -> list[dict]:
                 "source": "dynamic_topic",
             })
     except Exception:
-        pass
+        _log.debug("Failed to load KPs from dynamic_topics", exc_info=True)
 
     # Fallback: qa_pairs representative QAs (legacy)
     try:
@@ -150,15 +151,15 @@ def _load_kp_from_db(db) -> list[dict]:
                 "source": "qa_pairs",
             })
     except Exception:
-        pass
+        _log.debug("Failed to load KPs from qa_pairs", exc_info=True)
     return kps
 
 
-def _load_kp_cache(db=None) -> list[dict]:
+def load_kp_cache(db=None) -> list[dict]:
     """Load KP cache: DB first (structured), points.txt fallback (parsed)."""
     # Primary: DB read
     if db:
-        kps = _load_kp_from_db(db)
+        kps = load_kp_from_db(db)
         if kps:
             return kps
 
@@ -195,13 +196,14 @@ def _load_kp_cache(db=None) -> list[dict]:
                             break
                     kps.append({"topic": current_topic, "concept": concept, "detail": detail, "pitfall": pitfall, "scoring": scoring})
     except Exception:
-        pass
+        _log.debug("Failed to parse points.txt KP cache", exc_info=True)
     return kps
 
 
 # ---- Agent 1: Query Analyst ----
 
-def _build_analysis_context(db, topics: list[str], student_verb: str, student_id: str) -> str:
+
+def build_analysis_context(db, topics: list[str], student_verb: str, student_id: str) -> str:
     """Build enrichment context from offline analysis results.
     Reads verb_patterns, topic_difficulty, topic_dependencies, student state.
     Returns empty string if no data available (graceful degradation)."""
@@ -222,7 +224,7 @@ def _build_analysis_context(db, topics: list[str], student_verb: str, student_id
                 elif d.get("mode_difficulty") == "basic":
                     parts.append(f"Topic [{t}] is basic — keep explanation concise and direct.")
     except Exception:
-        pass
+        _log.debug("Failed to load topic difficulty", exc_info=True)
 
     # 2. Command verb pattern — adapt answer structure
     if student_verb:
@@ -233,7 +235,7 @@ def _build_analysis_context(db, topics: list[str], student_verb: str, student_id
                     parts.append(f"Answer style for '{student_verb}' questions: {p['pattern_summary']}")
                     break
         except Exception:
-            pass
+            _log.debug("Failed to load verb patterns", exc_info=True)
 
     # 3. Prerequisites — warn if student hasn't mastered them
     try:
@@ -248,7 +250,7 @@ def _build_analysis_context(db, topics: list[str], student_verb: str, student_id
                         f"Briefly recap {pre_topic} before explaining {t}."
                     )
     except Exception:
-        pass
+        _log.debug("Failed to load prerequisites", exc_info=True)
 
     # 4. Student confusion history — personalize
     try:
@@ -258,14 +260,14 @@ def _build_analysis_context(db, topics: list[str], student_verb: str, student_id
         if relevant_confusions:
             parts.append(f"Student has shown confusion on: {', '.join(relevant_confusions)}. Address these carefully.")
     except Exception:
-        pass
+        _log.debug("Failed to load confusion history", exc_info=True)
 
     if parts:
         return "[Analysis Context]\n" + "\n".join(parts) + "\n\n"
     return ""
 
 
-def _agent_query_analyst(question: str, lang: str, client) -> dict:
+def agent_query_analyst(question: str, lang: str, client) -> dict:
     """Analyze question: rephrase for retrieval, classify type, extract command verb."""
     if lang == 'en':
         sys = "Analyze the student's question. Output JSON."
@@ -289,12 +291,13 @@ def _agent_query_analyst(question: str, lang: str, client) -> dict:
         result = call_flash(client, [{"role": "system", "content": sys}, {"role": "user", "content": usr}], max_retries=1)
         return result if isinstance(result, dict) else {"keywords": [], "qtype": "explanation", "verb": ""}
     except Exception:
+        _log.debug("Query analyst failed", exc_info=True)
         return {"keywords": [], "qtype": "explanation", "verb": ""}
 
 
 # ---- Agent 3: Answer Generator (type-adaptive) ----
 
-def _agent_answer_generator(question: str, qtype: str, lang: str, ctx: str, ctx_kp: str, history: list, client) -> dict:
+def agent_answer_generator(question: str, qtype: str, lang: str, ctx: str, ctx_kp: str, history: list, client) -> dict:
     """Generate answer with type-adaptive prompt."""
     sys = (
         "You are a knowledgeable and patient tutor. "
@@ -356,12 +359,13 @@ def _agent_answer_generator(question: str, qtype: str, lang: str, ctx: str, ctx_
         result = call_flash(client, msgs, max_retries=1)
         return result if isinstance(result, dict) else {"answer": str(result)}
     except Exception:
+        _log.debug("Answer generator failed", exc_info=True)
         return {"answer": ""}
 
 
 # ---- Agent 4: Critic ----
 
-def _agent_critic(question: str, answer: str, similar: list, lang: str, client) -> dict:
+def agent_critic(question: str, answer: str, similar: list, lang: str, client) -> dict:
     """Review answer quality. Returns {pass: bool, feedback: str}."""
     ctx = ""
     for i, qa in enumerate(similar[:3], 1):
@@ -397,12 +401,13 @@ def _agent_critic(question: str, answer: str, similar: list, lang: str, client) 
         result = call_flash(client, [{"role": "system", "content": sys}, {"role": "user", "content": usr}], max_retries=1)
         return result if isinstance(result, dict) else {"pass": True, "feedback": ""}
     except Exception:
+        _log.debug("Critic failed", exc_info=True)
         return {"pass": False, "feedback": "Review unavailable (API error), retrying"}
 
 
 # ---- Agent 5: Follow-up Suggester ----
 
-def _agent_suggest(question: str, answer: str, similar: list, lang: str, client,
+def agent_suggest(question: str, answer: str, similar: list, lang: str, client,
                    db=None, session_id: str = "") -> list[str]:
     """Generate follow-up question suggestions, enriched with dependency data."""
     topics = list(set(qa.get("topic", "") for qa in similar[:5] if qa.get("topic")))
@@ -422,7 +427,7 @@ def _agent_suggest(question: str, answer: str, similar: list, lang: str, client,
             if all_prereqs:
                 prereq_hint = f"Prerequisites not yet mastered: {', '.join(all_prereqs)}. Suggest reviewing these.\n"
         except Exception:
-            pass
+            _log.debug("Failed to load prerequisites for suggestions", exc_info=True)
 
     if lang == 'en':
         sys = "Suggest 2-3 follow-up questions a student might ask. Output JSON."
@@ -534,19 +539,6 @@ def _run_analysis(config: dict):
 # ---- API Routes ----
 
 
-def _load_config() -> dict:
-    config = {}
-    if os.path.exists(CONFIG_FILE):
-        try:
-            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-                config = json.load(f)
-        except Exception:
-            pass
-    config["api_url"] = os.environ.get("DEEPSEEK_API_URL", config.get("api_url", ""))
-    config["api_key"] = os.environ.get("DEEPSEEK_API_KEY", config.get("api_key", ""))
-    return config
-
-
 def _save_config(data: dict):
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
@@ -560,7 +552,7 @@ def config_endpoint():
             return jsonify({"error": "Invalid JSON body"}), 400
         _save_config(data)
         return jsonify({"success": True})
-    return jsonify(_load_config())
+    return jsonify(load_config())
 
 
 @app.route("/api/files")
@@ -580,7 +572,7 @@ def start_analysis():
         if analysis_state["running"]:
             return jsonify({"error": "分析正在进行中"}), 400
 
-        config = _load_config()
+        config = load_config()
         if not config.get("api_url") or not config.get("api_key"):
             return jsonify({"error": "请先配置 API URL 和 API Key"}), 400
 
@@ -615,7 +607,9 @@ def start_analysis():
 
 @app.route("/api/status")
 def get_status():
-    return jsonify(analysis_state)
+    with _state_lock:
+        state_copy = dict(analysis_state)
+    return jsonify(state_copy)
 
 
 @app.route("/api/points")
@@ -681,7 +675,7 @@ def chat():
     if retriever is None:
         return jsonify({"error": "知识库尚未建立，请先运行分析"}), 400
 
-    config = _load_config()
+    config = load_config()
     if not config.get("api_url") or not config.get("api_key"):
         return jsonify({"error": "请先配置 API"}), 400
 
@@ -695,10 +689,10 @@ def chat():
     try:
         history = retriever._db.get_chat_history(session_id)
     except Exception:
-        pass
+        _log.debug("Failed to load chat history", exc_info=True)
 
     # Agent 1: Query Analyst — rephrase + classify + extract verb
-    analysis = _agent_query_analyst(question, lang, client)
+    analysis = agent_query_analyst(question, lang, client)
     keywords = analysis.get("keywords", [])
     qtype = analysis.get("qtype", "explanation")
     student_verb = analysis.get("verb", "")
@@ -741,7 +735,7 @@ def chat():
 
     # Enrichment from offline analysis: difficulty, verb patterns, prerequisites, student state
     relevant_topics = list(set(qa.get("topic", "") for qa in relevant[:3] if qa.get("topic")))
-    analysis_ctx = _build_analysis_context(retriever._db, relevant_topics, student_verb, session_id)
+    analysis_ctx = build_analysis_context(retriever._db, relevant_topics, student_verb, session_id)
     if analysis_ctx:
         has_diff = "difficulty" in analysis_ctx.lower()
         has_verb = "answer style" in analysis_ctx.lower()
@@ -752,25 +746,25 @@ def chat():
     ctx = analysis_ctx + ctx  # prepend: analysis context goes before Q&A context
 
     # Agent 3: Answer Generator (type-adaptive)
-    answer_raw = _agent_answer_generator(question, qtype, lang, ctx, ctx_kp, history, client)
+    answer_raw = agent_answer_generator(question, qtype, lang, ctx, ctx_kp, history, client)
     answer_text = answer_raw.get("answer", "") if isinstance(answer_raw, dict) else str(answer_raw)
     quiz = answer_raw.get("quiz") if isinstance(answer_raw, dict) else None
     path_hint = answer_raw.get("path_hint") if isinstance(answer_raw, dict) else None
 
     # Agent 4: Critic — review and optionally regenerate
     for _ in range(2):
-        review = _agent_critic(question, answer_text, relevant, lang, client)
+        review = agent_critic(question, answer_text, relevant, lang, client)
         if review.get("pass", True):
             break
         if lang == 'en':
             ctx += f"\nPrevious answer issues: {review.get('feedback', '')}\nPlease fix these issues.\n"
         else:
             ctx += f"\n上次回答问题: {review.get('feedback', '')}\n请修正这些问题。\n"
-        answer_raw2 = _agent_answer_generator(question, qtype, lang, ctx, ctx_kp, history, client)
+        answer_raw2 = agent_answer_generator(question, qtype, lang, ctx, ctx_kp, history, client)
         answer_text = answer_raw2.get("answer", "") if isinstance(answer_raw2, dict) else str(answer_raw2)
 
     # Agent 5: Follow-up Suggester (enriched with prerequisite data)
-    suggestions = _agent_suggest(question, answer_text, relevant, lang, client,
+    suggestions = agent_suggest(question, answer_text, relevant, lang, client,
                                  db=retriever._db, session_id=session_id)
 
     # Save to history + record student trajectory
@@ -792,9 +786,9 @@ def chat():
                     for r in rows:
                         retriever._db.record_trajectory(session_id, r["kp_id"], "new", "learning", "chat_question")
                 except Exception:
-                    pass
+                    _log.debug("Failed to record trajectory", exc_info=True)
     except Exception:
-        pass
+        _log.debug("Failed to load student knowledge state", exc_info=True)
 
     # Build sources for frontend
     sources = []
@@ -834,7 +828,7 @@ def start_evaluation():
         if retriever is None:
             return jsonify({"error": "知识库尚未建立"}), 400
         _eval_state = {"running": True, "progress": 0, "report": "", "error": None}
-    config = _load_config()
+    config = load_config()
     if not config.get("api_url") or not config.get("api_key"):
         return jsonify({"error": "请先配置 API"}), 400
 
@@ -951,7 +945,7 @@ def practice_generate():
     data = request.get_json()
     if not data or "kp_id" not in data:
         return jsonify({"error": "Missing kp_id"}), 400
-    config = _load_config()
+    config = load_config()
     if not config.get("api_url"):
         return jsonify({"error": "请先配置 API"}), 400
     try:
@@ -977,7 +971,7 @@ def practice_grade():
     data = request.get_json()
     if not data or "question" not in data or "student_answer" not in data:
         return jsonify({"error": "Missing question or student_answer"}), 400
-    config = _load_config()
+    config = load_config()
     if not config.get("api_url"):
         return jsonify({"error": "请先配置 API"}), 400
     try:
@@ -1081,7 +1075,7 @@ def knowledge_graph():
                     "type": "merged_from", "confidence": "medium",
                 })
     except Exception:
-        pass
+        _log.debug("Failed to load knowledge graph evolution data", exc_info=True)
 
     return jsonify({"nodes": nodes, "edges": edges})
 

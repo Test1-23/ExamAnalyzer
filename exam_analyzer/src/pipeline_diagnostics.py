@@ -16,6 +16,13 @@ from .logger import get_logger
 
 _log = get_logger()
 
+# ---- Tunable constants ----
+ANOMALY_ZSCORE_SINGLE = 3.0   # single dimension anomaly threshold
+ANOMALY_ZSCORE_SYSTEMIC = 2.0  # systemic anomaly threshold
+SYSTEMIC_DIMENSION_COUNT = 3   # number of dimensions above threshold for systemic anomaly
+DIFFICULTY_HARD_THRESHOLD = 2.0
+DIFFICULTY_EASY_THRESHOLD = 1.3
+
 
 def auto_discover_pitfalls(db: QADatabase, kp_id: str, debug_cb=None) -> list[dict]:
     """Discover pitfalls from Phase 2 missed_points data for a KP."""
@@ -46,22 +53,9 @@ def auto_discover_pitfalls(db: QADatabase, kp_id: str, debug_cb=None) -> list[di
         if debug_cb:
             debug_cb(f"  Pitfall embedding failed for {kp_id}: {e}")
         return []
-    n = len(missed_lines)
-    assigned = [False] * n
-    patterns = []
-    for i in range(n):
-        if assigned[i]:
-            continue
-        group = [missed_lines[i]]
-        assigned[i] = True
-        for j in range(i + 1, n):
-            if assigned[j]:
-                continue
-            if float(np.dot(vecs[i], vecs[j])) >= 0.80:
-                group.append(missed_lines[j])
-                assigned[j] = True
-        if len(group) >= 3:
-            patterns.append({"pattern": group[0], "count": len(group)})
+    from .embedding_cluster import cluster_by_cosine
+    groups = cluster_by_cosine(vecs, 0.80, min_group_size=3)
+    patterns = [{"pattern": missed_lines[g[0]], "count": len(g)} for g in groups]
     if patterns:
         patterns.sort(key=lambda x: -x["count"])
         kp = db.get_kp_by_id(kp_id)
@@ -113,9 +107,9 @@ def compute_exam_trends(db: QADatabase, client, debug_cb=None) -> int:
         for r in rows:
             diff_label = "basic"
             avg = r["avg_diff"]
-            if avg and avg > 2.0:
+            if avg and avg > DIFFICULTY_HARD_THRESHOLD:
                 diff_label = "advanced"
-            elif avg and avg > 1.3:
+            elif avg and avg > DIFFICULTY_EASY_THRESHOLD:
                 diff_label = "intermediate"
             db.upsert_exam_trend(
                 kp_id=kp_id, year=r["year"], season=r["season"],
@@ -267,16 +261,16 @@ def detect_anomalies(db: QADatabase, display_name: str) -> list[str]:
         if mad == 0:
             continue
         z = abs(val - med) / mad
-        if z > 3.0:
+        if z > ANOMALY_ZSCORE_SINGLE:
             anomalies.append(f"{dim} severely anomalous (z={z:.1f}, value={val}, median={med})")
-        elif z > 2.0:
+        elif z > ANOMALY_ZSCORE_SYSTEMIC:
             anomalies.append(f"{dim} moderately anomalous (z={z:.1f}, value={val}, median={med})")
     multi_check_dims = ["qa_count", "topic_count", "avg_miss_rate", "avg_answer_length"]
     dims_over = sum(1 for dim in multi_check_dims
                     if (bl := baselines.get(dim)) and bl["sample_count"] >= 3
                     and (val := sig_rows[dim]) is not None and bl["mad"] != 0
                     and abs(val - bl["median"]) / bl["mad"] > 2.0)
-    if dims_over >= 3:
+    if dims_over >= SYSTEMIC_DIMENSION_COUNT:
         anomalies.append(f"SYSTEMIC: {dims_over}/{len(multi_check_dims)} dimensions anomalous")
     return anomalies
 

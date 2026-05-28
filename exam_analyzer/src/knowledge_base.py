@@ -16,6 +16,25 @@ from .logger import get_logger
 
 _log = get_logger()
 
+# ---- Tunable constants ----
+SQLITE_PARAM_CHUNK = 900     # SQLite max bound parameters = 999
+CHANNEL_A_RECALL = 30        # dual-channel: embedding recall size
+BEHAVIOR_CHUNK = 400         # dual-channel: behavior score chunking
+WEIGHT_EMBEDDING = 0.35      # dual-channel: semantic weight
+WEIGHT_TOPIC = 0.35          # dual-channel: topic affiliation weight
+WEIGHT_BEHAVIOR = 0.20       # dual-channel: behavior history weight
+WEIGHT_KEYWORD = 0.10        # dual-channel: keyword match weight
+
+
+# ============================================================
+# Helpers
+# ============================================================
+
+def make_topic_id(topic: str) -> str:
+    """Sanitize a topic name into a stable ID: ``topic_<sanitized_name>``."""
+    sanitized = topic.replace(" ", "_").replace("/", "_")
+    return f"topic_{sanitized}"
+
 
 # ============================================================
 # QADatabase
@@ -513,7 +532,7 @@ class QADatabase:
         if not ids:
             return []
         row_map = {}
-        CHUNK = 900  # SQLite max bound parameters = 999
+        CHUNK = SQLITE_PARAM_CHUNK  # SQLite max bound parameters = 999
         for i in range(0, len(ids), CHUNK):
             chunk = ids[i:i + CHUNK]
             placeholders = ",".join("?" * len(chunk))
@@ -1700,7 +1719,7 @@ class QARetriever:
         behavior_scores = {}
         if helped_qa_set and candidate_qa_ids:
             helped_list = list(helped_qa_set)
-            CHUNK = 400   # leave room for candidate_qa_ids chunk
+            CHUNK = BEHAVIOR_CHUNK   # leave room for candidate_qa_ids chunk
             for i in range(0, len(candidate_qa_ids), CHUNK):
                 c_chunk = candidate_qa_ids[i:i + CHUNK]
                 for j in range(0, len(helped_list), CHUNK):
@@ -1734,8 +1753,8 @@ class QARetriever:
             qa_keywords = set(qa_text.split())
             kw_jaccard = len(keyword_query & qa_keywords) / max(len(keyword_query | qa_keywords), 1)
 
-            composite = (0.35 * emb_score + 0.35 * topic_score
-                         + 0.20 * behavior_score + 0.10 * kw_jaccard)
+            composite = (WEIGHT_EMBEDDING * emb_score + WEIGHT_TOPIC * topic_score
+                         + WEIGHT_BEHAVIOR * behavior_score + WEIGHT_KEYWORD * kw_jaccard)
             qa["_score"] = composite
 
         # Sort by composite score and return top-k

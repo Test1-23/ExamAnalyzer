@@ -12,6 +12,10 @@ from .logger import get_logger
 
 _log = get_logger()
 
+# ---- Tunable constants ----
+CJK_DETECTION_THRESHOLD = 0.05  # ratio of CJK chars above which text is classified as Chinese
+EMBEDDING_BATCH_SIZE = 64       # batch_size passed to model.encode()
+
 
 # ---------------------------------------------------------------------------
 # Global model cache — load each model only once per process
@@ -63,7 +67,7 @@ def _detect_language(texts: List[str]) -> str:
     if total == 0:
         return 'en'
     ratio = cjk / total
-    return 'zh' if ratio > 0.05 else 'en'
+    return 'zh' if ratio > CJK_DETECTION_THRESHOLD else 'en'
 
 
 def detect_content_lang(text: str) -> str:
@@ -105,7 +109,7 @@ class EmbeddingClusterer:
         model = _get_model(self._model_name)
         result = model.encode(
             texts,
-            batch_size=64,
+            batch_size=EMBEDDING_BATCH_SIZE,
             show_progress_bar=False,
             convert_to_numpy=True,
             normalize_embeddings=True,
@@ -113,3 +117,29 @@ class EmbeddingClusterer:
         elapsed = int((time.time() - t0) * 1000)
         _log.debug(f"Embedding encode: model={self._model_name}, texts={len(texts)}, {elapsed}ms")
         return result
+
+
+# ---------------------------------------------------------------------------
+# Shared clustering utility — replaces duplicated threshold-based grouping
+# ---------------------------------------------------------------------------
+
+def cluster_by_cosine(vectors: np.ndarray, threshold: float,
+                      min_group_size: int = 2) -> list[list[int]]:
+    """Greedy single-pass cosine clustering. Returns list of index-groups."""
+    n = len(vectors)
+    assigned = [False] * n
+    groups: list[list[int]] = []
+    for i in range(n):
+        if assigned[i]:
+            continue
+        group = [i]
+        assigned[i] = True
+        for j in range(i + 1, n):
+            if assigned[j]:
+                continue
+            if float(np.dot(vectors[i], vectors[j])) >= threshold:
+                group.append(j)
+                assigned[j] = True
+        if len(group) >= min_group_size:
+            groups.append(group)
+    return groups

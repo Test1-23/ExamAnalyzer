@@ -5,3 +5,8 @@ pdfplumber>=0.10.0
 sentence-transformers>=2.0.0
 numpy
 requests
+# dev
+ruff
+mypy
+pytest
+pytest-mock

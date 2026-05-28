@@ -1,30 +1,14 @@
 import os
-import json
 from src.pipeline import run_pipeline
+from src.config import load_config
 
 THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 INPUT_DIR = os.path.join(THIS_DIR, "input")
 POINTS_FILE = os.path.join(THIS_DIR, "point", "points.txt")
-CONFIG_FILE = os.path.join(THIS_DIR, "config.json")
-
-
-def _load_config() -> dict:
-    """Load API config from file, with env var overrides."""
-    config = {}
-    if os.path.exists(CONFIG_FILE):
-        try:
-            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-                config = json.load(f)
-        except Exception:
-            pass
-    # Environment variables take precedence
-    config["api_url"] = os.environ.get("DEEPSEEK_API_URL", config.get("api_url", ""))
-    config["api_key"] = os.environ.get("DEEPSEEK_API_KEY", config.get("api_key", ""))
-    return config
 
 
 def main():
-    config = _load_config()
+    config = load_config()
     api_url = config.get("api_url", "")
     api_key = config.get("api_key", "")
 

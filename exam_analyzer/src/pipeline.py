@@ -18,9 +18,33 @@ from typing import Callable, Optional
 
 from .deepseek_client import create_client, call_flash
 from .file_pairer import pair_files
-from .knowledge_base import QADatabase, QARetriever
+from .knowledge_base import QADatabase, QARetriever, make_topic_id
 from .pdf_extractor import extract_pdf
 from .embedding_cluster import detect_content_lang, TOPIC_EMBED_MODEL
+from .prompt_factory import SUMMARY, FRAGMENT, QA_CLASSIFY, ANSWER, GRADE
+
+# ---- Tunable constants ----
+# Retrieval
+RETRIEVAL_THRESHOLD = 0.5    # dual-channel min similarity
+RETRIEVAL_MIN_K = 3          # dual-channel min results
+RETRIEVAL_MAX_CAP = 15       # dual-channel max results
+
+# QA vector placement (centrality thresholds)
+CENTRALITY_HIGH = 0.8        # assign to primary KP
+CENTRALITY_MID = 0.5         # assign to secondary KP
+CENTRALITY_LOW = 0.2         # assign to tertiary KP
+
+# Topic merge
+TOPIC_MERGE_COS_THRESHOLD = 0.85
+TOPIC_MERGE_AMBIGUOUS_THRESHOLD = 0.30
+
+# Fragment help level
+HELP_DIRECT_THRESHOLD = 0.7
+HELP_UNDERSTANDING_THRESHOLD = 0.3
+
+# Missed line analysis
+MISSED_FILTER_THRESHOLD = 0.60
+MISSED_CLUSTER_THRESHOLD = 0.80
 
 
 # ============================================================
@@ -127,6 +151,50 @@ def stage2_qa_pairing(pair, client, debug: Callable) -> list:
 # Bilingual prompt sets for each API call
 # ============================================================
 
+# -- Data helpers --
+
+def _parse_missed_points(missed_raw: list) -> tuple[list[str], str]:
+    """Parse missed_points from grading result.
+
+    New format: [{"point":"...", "reason":"..."}, ...]
+    Old format: ["...", ...] — flatten for backward compat.
+    Returns (missed_texts, miss_cats_json).
+    """
+    missed_texts = []
+    miss_cats = {"knowledge_gap": 0, "misinterpretation": 0,
+                 "insufficient_detail": 0, "retrieval_quality": 0}
+    for mp in missed_raw:
+        if isinstance(mp, dict):
+            missed_texts.append(mp.get("point", ""))
+            reason = mp.get("reason", "")
+            if reason in miss_cats:
+                miss_cats[reason] += 1
+        elif isinstance(mp, str):
+            missed_texts.append(mp)
+    miss_cats_json = json.dumps(miss_cats) if any(miss_cats.values()) else ""
+    return missed_texts, miss_cats_json
+
+
+def _record_fragment_help(used_ids: set, covered: list, missed_texts: list,
+                          db: QADatabase, qa_id: int) -> None:
+    """Record which fragments from used QAs helped answer this question."""
+    if not used_ids:
+        return
+    for used_qa_id in used_ids:
+        used_frags = db.conn.execute(
+            "SELECT point_id FROM ms_fragments WHERE qa_id=?",
+            (used_qa_id,)
+        ).fetchall()
+        frag_ids = [r["point_id"] for r in used_frags]
+        if frag_ids:
+            help_effect = len(covered) / max(len(covered) + len(missed_texts), 1)
+            help_level = "direct" if help_effect >= HELP_DIRECT_THRESHOLD else (
+                "understanding" if help_effect >= HELP_UNDERSTANDING_THRESHOLD else "none")
+            for fid in frag_ids:
+                db.record_fragment_help_with_level(
+                    fid, qa_id, round(help_effect, 3), help_level)
+
+
 # -- Summary + Topic (Flash) --
 
 def _generate_summary(question_text: str, answer_text: str,
@@ -177,24 +245,7 @@ def _generate_summary(question_text: str, answer_text: str,
 
 def _extract_ms_fragments(answer_text: str, qa_id: int, client, debug: Callable) -> list[dict]:
     """Split a mark scheme answer into individual scoring points. Preserves original wording."""
-    lang = detect_content_lang(answer_text)
-
-    if lang == 'en':
-        sys = ("You are an exam marking expert. Split the given mark scheme answer "
-               "into individual scoring points. Output JSON.")
-        usr = (f"Mark scheme answer:\n{answer_text}\n\n"
-               "Split into independent scoring points. Each point is a single, "
-               "non-divisible requirement that a student must demonstrate.\n"
-               "Preserve the original wording exactly. Do not rewrite or paraphrase.\n"
-               'Return JSON: {"points": [{"text": "exact original wording", "marks": 1}, ...]}')
-    else:
-        sys = ("你是一个考试评分专家。将给定的评分标准答案拆分为独立的得分点。Output JSON。")
-        usr = (f"评分标准答案:\n{answer_text}\n\n"
-               "拆分为独立的得分点。每个得分点是一个不可再分的要求。\n"
-               "保留原文措辞，不要改写。\n"
-               '返回 JSON: {"points": [{"text": "原始措辞", "marks": 1}, ...]}')
-
-    messages = [{"role": "system", "content": sys}, {"role": "user", "content": usr}]
+    messages = FRAGMENT.build(lang_source=answer_text, answer_text=answer_text)
     try:
         result = call_flash(client, messages, max_retries=1, debug_callback=debug)
         points = result.get("points", []) if isinstance(result, dict) else []
@@ -227,28 +278,10 @@ def _classify_qa_against_kps(qa_text: str, answer_text: str, kp_concepts: list[d
         # Keep top KPs by evidence_count (most validated)
         kp_concepts = sorted(kp_concepts, key=lambda k: k.get("evidence", 0), reverse=True)[:MAX_KPS]
 
-    lang = detect_content_lang(qa_text + answer_text)
     kp_list = "\n".join(f"[{k['id']}] {k['concept']}" for k in kp_concepts)
-
-    if lang == 'en':
-        sys = ("You are an exam curriculum expert. Judge whether each listed knowledge "
-               "point is tested by the given question. Score each KP. Output JSON.")
-        usr = (f"Question: {qa_text[:500]}\n\nAnswer: {answer_text[:500]}\n\n"
-               f"Knowledge Points:\n{kp_list}\n\n"
-               "For each KP, score:\n"
-               "1.0 = core focus — the question directly tests this KP\n"
-               "0.5 = indirectly involved — background knowledge helpful\n"
-               "0.0 = unrelated\n"
-               'Return JSON: {"kp_scores": {"kp_id": 1.0, ...}}')
-    else:
-        sys = ("你是一个考试课程专家。判断每个知识点是否被给定的题目考察。逐项评分。Output JSON。")
-        usr = (f"题目: {qa_text[:500]}\n\n答案: {answer_text[:500]}\n\n"
-               f"知识点:\n{kp_list}\n\n"
-               "对每个KPi评分:\n"
-               "1.0 = 核心考察\n0.5 = 间接涉及\n0.0 = 无关\n"
-               '返回 JSON: {"kp_scores": {"kp_id": 1.0, ...}}')
-
-    messages = [{"role": "system", "content": sys}, {"role": "user", "content": usr}]
+    messages = QA_CLASSIFY.build(lang_source=qa_text + answer_text,
+                                  qa_text=qa_text[:500], answer_text=answer_text[:500],
+                                  kp_list=kp_list)
     try:
         result = call_flash(client, messages, max_retries=1, debug_callback=debug)
         scores = result.get("kp_scores", {}) if isinstance(result, dict) else {}
@@ -280,7 +313,7 @@ def _place_qa_vector_from_kp_scores(db: QADatabase, qa_id: int,
         topic = kp_data.get("description", "") if kp_data else ""
         topic = topic[:80] if topic else ""
 
-    centrality = 0.8 if best_score >= 0.8 else (0.5 if best_score >= 0.5 else 0.2)
+    centrality = CENTRALITY_HIGH if best_score >= CENTRALITY_HIGH else (CENTRALITY_MID if best_score >= CENTRALITY_MID else CENTRALITY_LOW)
 
     # Update QA's topic and centrality
     if topic:
@@ -571,7 +604,7 @@ def run_pipeline(
                         qa.answer_text, qa_id, client, _debug)
                     if fragments:
                         db.insert_fragments_batch(fragments)
-                        topic_id = f"topic_{topic.replace(' ', '_').replace('/', '_')}"
+                        topic_id = make_topic_id(topic)
                         db.upsert_dynamic_topic(
                             topic_id, name=topic, quality="embryonic")
                         for frag in fragments:
@@ -627,7 +660,7 @@ def run_pipeline(
 
                 # Layer 2 dual-channel retrieval (embedding + structure + behavior)
                 all_similar = retriever.search_dual_channel(
-                    summary, threshold=0.5, min_k=3, max_cap=15,
+                    summary, threshold=RETRIEVAL_THRESHOLD, min_k=RETRIEVAL_MIN_K, max_cap=RETRIEVAL_MAX_CAP,
                     query_topic=step0_topic)
 
                 # Filter to top-4 by Beta weight for Pro context (reduces input tokens ~70%)
@@ -706,20 +739,7 @@ def run_pipeline(
                     covered, missed_raw = [], []
                     r2_ok = False
 
-                # Parse missed points: new format is [{"point":"...", "reason":"..."}, ...]
-                # Old format was ["...", ...] — flatten for backward compat
-                missed_texts = []
-                miss_cats = {"knowledge_gap": 0, "misinterpretation": 0,
-                             "insufficient_detail": 0, "retrieval_quality": 0}
-                for mp in missed_raw:
-                    if isinstance(mp, dict):
-                        missed_texts.append(mp.get("point", ""))
-                        reason = mp.get("reason", "")
-                        if reason in miss_cats:
-                            miss_cats[reason] += 1
-                    elif isinstance(mp, str):
-                        missed_texts.append(mp)
-                miss_cats_json = json.dumps(miss_cats) if any(miss_cats.values()) else ""
+                missed_texts, miss_cats_json = _parse_missed_points(missed_raw)
 
                 db.log_api_call("grade", "flash", display_name, qn,
                                 int((time.time()-t0)*1000), success=r2_ok,
@@ -756,7 +776,7 @@ def run_pipeline(
                         qa.answer_text, qa_id, client, _debug)
                     if fragments:
                         db.insert_fragments_batch(fragments)
-                        topic_id = f"topic_{topic.replace(' ', '_').replace('/', '_')}"
+                        topic_id = make_topic_id(topic)
                         db.upsert_dynamic_topic(
                             topic_id, name=topic, quality="embryonic")
                         for frag in fragments:
@@ -774,22 +794,7 @@ def run_pipeline(
                             _place_qa_vector_from_kp_scores(db, qa_id, kp_scores, _debug)
 
                     # Record behavior: fragments from used QAs helped this question
-                    if used_ids:
-                        for used_qa_id in used_ids:
-                            used_frags = db.conn.execute(
-                                "SELECT point_id FROM ms_fragments WHERE qa_id=?",
-                                (used_qa_id,)
-                            ).fetchall()
-                            frag_ids = [r["point_id"] for r in used_frags]
-                            if frag_ids:
-                                help_effect = (len(covered) / max(
-                                    len(covered) + len(missed_texts), 1))
-                                # Determine help_level from grading result
-                                help_level = "direct" if help_effect >= 0.7 else (
-                                    "understanding" if help_effect >= 0.3 else "none")
-                                for fid in frag_ids:
-                                    db.record_fragment_help_with_level(
-                                        fid, qa_id, round(help_effect, 3), help_level)
+                    _record_fragment_help(used_ids, covered, missed_texts, db, qa_id)
                 except Exception as e:
                     _debug(f"  fragment extraction failed for Q{qn}: {e}")
 
@@ -889,7 +894,7 @@ def run_pipeline(
         if any(src == topic or dst == topic for (src, dst) in topic_links):
             continue
         query = qas[0].get("knowledge_summary", "") or qas[0]["question_text"]
-        results = retriever.search(query, threshold=0.5, min_k=3, max_cap=15)
+        results = retriever.search(query, threshold=RETRIEVAL_THRESHOLD, min_k=RETRIEVAL_MIN_K, max_cap=RETRIEVAL_MAX_CAP)
         counts = {}
         for r in results:
             rt = r.get("topic", "")
@@ -1043,7 +1048,7 @@ def _merge_similar_topics(db: QADatabase, client, debug: Callable):
             if topic_names[j] in done:
                 continue
             cos = float(cos_matrix[i][j])
-            if cos >= 0.85:
+            if cos >= TOPIC_MERGE_COS_THRESHOLD:
                 # Canonical = topic with more QAs (higher frequency, not shorter name)
                 cnt_i = len(groups.get(topic_names[i], []))
                 cnt_j = len(groups.get(topic_names[j], []))
@@ -1056,7 +1061,7 @@ def _merge_similar_topics(db: QADatabase, client, debug: Callable):
                     mergers[topic_names[i]] = canonical
                     done.add(topic_names[i])
                 debug(f"  Topic merge: -> '{canonical}' (cos={cos:.2f})")
-            elif cos >= 0.30:
+            elif cos >= TOPIC_MERGE_AMBIGUOUS_THRESHOLD:
                 ambiguous.append((topic_names[i], topic_names[j], cos))
 
     if ambiguous:
@@ -1183,38 +1188,25 @@ def _build_missed_ref(db: QADatabase, topic: str, qas: list[dict], debug: Callab
         debug(f"  missed embedding failed for '{topic}': {e}")
         return ""
 
-    # Filter: keep missed lines similar to any answer_text (cos >= 0.60)
+    # Filter: keep missed lines similar to any answer_text
     filtered = []
     for i, line in enumerate(raw_missed):
         best_cos = max(float(np.dot(missed_vecs[i], av)) for av in answer_vecs)
-        if best_cos >= 0.60:
+        if best_cos >= MISSED_FILTER_THRESHOLD:
             filtered.append(line)
 
     if len(filtered) < 2:
         return ""
 
-    # Cluster: group by cos >= 0.80, keep groups with >= 2 members
+    # Cluster: group by cosine threshold, keep groups with >= 2 members
     try:
         fvecs = model.encode(filtered, normalize_embeddings=True, convert_to_numpy=True)
     except Exception as e:
         debug(f"  missed cluster encoding failed for '{topic}': {e}")
         return ""
-    n = len(filtered)
-    assigned = [False] * n
-    patterns = []
-    for i in range(n):
-        if assigned[i]:
-            continue
-        group = [filtered[i]]
-        assigned[i] = True
-        for j in range(i + 1, n):
-            if assigned[j]:
-                continue
-            if float(np.dot(fvecs[i], fvecs[j])) >= 0.80:
-                group.append(filtered[j])
-                assigned[j] = True
-        if len(group) >= 2:
-            patterns.append(group[0])
+    from .embedding_cluster import cluster_by_cosine
+    groups = cluster_by_cosine(fvecs, MISSED_CLUSTER_THRESHOLD, min_group_size=2)
+    patterns = [filtered[g[0]] for g in groups]
 
     if not patterns:
         return ""

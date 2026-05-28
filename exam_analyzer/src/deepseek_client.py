@@ -12,6 +12,7 @@ _log = get_logger()
 
 FLASH_MODEL = "deepseek-v4-flash"
 PRO_MODEL = "deepseek-v4-pro"
+DEFAULT_MAX_RETRIES = 3
 
 
 def create_client(api_url: str, api_key: str) -> OpenAI:
@@ -109,7 +110,7 @@ def _call_with_retry(
     client: OpenAI,
     model: str,
     messages: list,
-    max_retries: int = 3,
+    max_retries: int = DEFAULT_MAX_RETRIES,
     debug_callback=None,
     skip_json: bool = False,
 ) -> dict:
@@ -166,7 +167,7 @@ def _call_with_retry(
 def call_flash(
     client: OpenAI,
     messages: list,
-    max_retries: int = 3,
+    max_retries: int = DEFAULT_MAX_RETRIES,
     debug_callback=None,
 ) -> dict:
     """Call deepseek-v4-flash with retry + JSON fallback."""
@@ -176,7 +177,7 @@ def call_flash(
 def call_pro(
     client: OpenAI,
     messages: list,
-    max_retries: int = 3,
+    max_retries: int = DEFAULT_MAX_RETRIES,
     debug_callback=None,
 ) -> dict:
     """Call deepseek-v4-pro with retry. JSON mode skipped (thinking incompatible)."""
