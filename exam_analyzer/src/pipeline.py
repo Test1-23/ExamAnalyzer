@@ -626,7 +626,10 @@ def run_pipeline(
                                 int((time.time()-t0)*1000), success=True, output_size=len(summary))
                 tracker.step("")
 
-                all_similar = retriever.search(summary, threshold=0.5, min_k=3, max_cap=15)
+                # Layer 2 dual-channel retrieval (embedding + structure + behavior)
+                all_similar = retriever.search_dual_channel(
+                    summary, threshold=0.5, min_k=3, max_cap=15,
+                    query_topic=step0_topic)
 
                 # Filter to top-4 by Beta weight for Pro context (reduces input tokens ~70%)
                 top_similar = sorted(

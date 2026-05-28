@@ -1571,6 +1571,152 @@ class QARetriever:
         _log.debug(f"Retrieval: qlen={len(query)}, results={len(results)}, threshold={threshold}")
         return results
 
+    def search_dual_channel(self, query: str, threshold: float = 0.5,
+                             min_k: int = 3, max_cap: int = 15,
+                             query_topic: str = "", query_kp_scores: dict = None) -> List[dict]:
+        """Layer 2 dual-channel retrieval: embedding + structure + behavior.
+
+        Channel A (semantic): embedding top-30
+        Channel B (structure): topic affiliation + behavioral graph walk (walk-1)
+        Mixed ranking: 0.35×embedding + 0.35×topic_match + 0.20×behavior + 0.10×keyword
+        """
+        # Ensure embeddings are ready
+        if self._embeddings is None or len(self._embeddings) == 0:
+            self._ensure_embeddings()
+        if self._embeddings is None or len(self._embeddings) == 0:
+            return self.search(query, threshold, min_k, max_cap)
+
+        # Channel A: embedding top-30 (high recall)
+        if self._embed_model_name is None:
+            lang = _detect_language([query])
+            self._embed_model_name = MODEL_MAP[lang]
+        model = _get_model(self._embed_model_name)
+        query_vec = model.encode([query], normalize_embeddings=True, convert_to_numpy=True)[0]
+        scores = np.dot(self._embeddings, query_vec)
+
+        channel_a_size = min(len(scores), 30)
+        top_a = np.argpartition(-scores, channel_a_size - 1)[:channel_a_size]
+        top_a = top_a[np.argsort(-scores[top_a])]
+
+        id_list = list(self._id_map.keys())
+        channel_a_ids = {id_list[idx] for idx in top_a}
+        channel_a_qas = [self._db.get(id_list[idx]) for idx in top_a]
+        channel_a_qas = [q for q in channel_a_qas if q]
+
+        # Channel B: structure — topic affiliation + graph walk
+        channel_b_ids = set()
+        keyword_query = set(query.lower().split())
+
+        # B1: Topic affiliation — QAs in the same or adjacent topics
+        if query_topic:
+            topic_rows = self._db.conn.execute(
+                "SELECT id, topic FROM qa_pairs WHERE topic=? AND topic!='' LIMIT 20",
+                (query_topic,)
+            ).fetchall()
+            channel_b_ids.update(r["id"] for r in topic_rows)
+
+            # Adjacent topics via topic_links
+            adj_rows = self._db.conn.execute(
+                "SELECT DISTINCT dst_topic FROM topic_links WHERE src_topic=? UNION "
+                "SELECT DISTINCT src_topic FROM topic_links WHERE dst_topic=?",
+                (query_topic, query_topic)
+            ).fetchall()
+            for adj in adj_rows[:5]:
+                adj_rows2 = self._db.conn.execute(
+                    "SELECT id FROM qa_pairs WHERE topic=? LIMIT 10",
+                    (adj["dst_topic"],)
+                ).fetchall()
+                channel_b_ids.update(r["id"] for r in adj_rows2)
+
+        # B2: Graph walk — QAs whose fragments helped same questions
+        if channel_a_ids:
+            placeholders_a = ",".join("?" * len(channel_a_ids))
+            walk_rows = self._db.conn.execute(
+                f"SELECT DISTINCT f2.qa_id FROM ("
+                f"SELECT DISTINCT fhm1.helped_qa_id FROM fragment_help_map fhm1 "
+                f"JOIN ms_fragments mf1 ON fhm1.fragment_id = mf1.point_id "
+                f"WHERE mf1.qa_id IN ({placeholders_a})"
+                f") shared_helps "
+                f"JOIN fragment_help_map fhm2 ON shared_helps.helped_qa_id = fhm2.helped_qa_id "
+                f"JOIN ms_fragments f2 ON fhm2.fragment_id = f2.point_id",
+                list(channel_a_ids)
+            ).fetchall()
+            channel_b_ids.update(r["qa_id"] for r in walk_rows)
+
+        # Remove Channel A overlap
+        channel_b_ids -= channel_a_ids
+
+        # Build candidate pool
+        candidates = []
+        for idx in top_a:
+            qa_id = id_list[idx]
+            qa = self._db.get(qa_id)
+            if qa:
+                qa["_score"] = float(scores[idx])
+                qa["_channel"] = "embedding"
+                candidates.append(qa)
+
+        for qa_id in channel_b_ids:
+            qa = self._db.get(qa_id)
+            if qa:
+                qa["_score"] = 0.0
+                qa["_channel"] = "structure"
+                candidates.append(qa)
+
+        # Mixed ranking
+        for qa in candidates:
+            emb_score = qa.get("_score", 0.0)
+            qa_topic = qa.get("topic", "")
+
+            # Topic match score
+            topic_score = 0.0
+            if query_topic and qa_topic:
+                if qa_topic == query_topic:
+                    topic_score = 1.0
+                elif query_topic:
+                    adj_check = self._db.conn.execute(
+                        "SELECT COUNT(*) as cnt FROM topic_links "
+                        "WHERE (src_topic=? AND dst_topic=?) OR (src_topic=? AND dst_topic=?)",
+                        (query_topic, qa_topic, qa_topic, query_topic)
+                    ).fetchone()
+                    if adj_check and adj_check["cnt"] > 0:
+                        topic_score = 0.5
+
+            # Behavior score
+            behavior_score = 0.0
+            if channel_a_ids:
+                bh_row = self._db.conn.execute(
+                    "SELECT COUNT(*) as cnt FROM fragment_help_map fhm "
+                    "JOIN ms_fragments mf ON fhm.fragment_id = mf.point_id "
+                    "WHERE mf.qa_id = ? AND fhm.helped_qa_id IN "
+                    f"(SELECT helped_qa_id FROM fragment_help_map fhm2 "
+                    f"JOIN ms_fragments mf2 ON fhm2.fragment_id = mf2.point_id "
+                    f"WHERE mf2.qa_id IN ({','.join('?' * len(channel_a_ids))}))",
+                    [qa["id"]] + list(channel_a_ids)
+                ).fetchone()
+                behavior_score = min(1.0, (bh_row["cnt"] if bh_row else 0) / 10.0)
+
+            # Keyword overlap
+            qa_text = (qa.get("question_text", "") + " " + qa.get("answer_text", "")).lower()
+            qa_keywords = set(qa_text.split())
+            kw_jaccard = len(keyword_query & qa_keywords) / max(len(keyword_query | qa_keywords), 1)
+
+            # Composite score
+            composite = (0.35 * emb_score + 0.35 * topic_score
+                         + 0.20 * behavior_score + 0.10 * kw_jaccard)
+            qa["_score"] = composite
+
+        # Sort by composite score and return top-k
+        candidates.sort(key=lambda q: q["_score"], reverse=True)
+        results = []
+        for qa in candidates:
+            if qa["_score"] >= threshold or len(results) < min_k:
+                results.append(qa)
+
+        _log.debug(f"Dual-channel retrieval: qlen={len(query)}, "
+                   f"chA={len(channel_a_ids)}, chB={len(channel_b_ids)}, results={len(results)}")
+        return results[:max_cap]
+
     def add_qa(self, qa_id: int, summary_text: str):
         """Add a new QA vector to the index. Uses raw QA text for embedding
         (consistent with _ensure_embeddings), falls back to summary_text."""
