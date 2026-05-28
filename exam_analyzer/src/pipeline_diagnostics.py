@@ -1163,7 +1163,6 @@ def _adjust_vectors_from_feedback(db: QADatabase, debug_cb=None) -> dict:
             continue
         # Use embedding of representative QA as KP vector
         qa_ids = [r["qa_id"] for r in member_rows[:5]]
-        from .embedding_cluster import _get_model, TOPIC_EMBED_MODEL
         model = _get_model(TOPIC_EMBED_MODEL)
         qa_texts = []
         for qid in qa_ids:

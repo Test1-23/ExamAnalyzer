@@ -1630,7 +1630,8 @@ class QARetriever:
 
         # B2: Graph walk — QAs whose fragments helped same questions
         if channel_a_ids:
-            placeholders_a = ",".join("?" * len(channel_a_ids))
+            walk_source = list(channel_a_ids)[:15]  # Cap source to control query complexity
+            placeholders_a = ",".join("?" * len(walk_source))
             walk_rows = self._db.conn.execute(
                 f"SELECT DISTINCT f2.qa_id FROM ("
                 f"SELECT DISTINCT fhm1.helped_qa_id FROM fragment_help_map fhm1 "
@@ -1639,7 +1640,7 @@ class QARetriever:
                 f") shared_helps "
                 f"JOIN fragment_help_map fhm2 ON shared_helps.helped_qa_id = fhm2.helped_qa_id "
                 f"JOIN ms_fragments f2 ON fhm2.fragment_id = f2.point_id",
-                list(channel_a_ids)
+                walk_source
             ).fetchall()
             channel_b_ids.update(r["qa_id"] for r in walk_rows)
 
@@ -1663,45 +1664,63 @@ class QARetriever:
                 qa["_channel"] = "structure"
                 candidates.append(qa)
 
-        # Mixed ranking
+        # Pre-load topic adjacency for fast lookup (avoid O(N) DB queries)
+        candidate_topics = {qa.get("topic", "") for qa in candidates if qa.get("topic")}
+        adjacency_map = {}
+        if query_topic and candidate_topics:
+            for ct in candidate_topics:
+                adj_row = self._db.conn.execute(
+                    "SELECT COUNT(*) as cnt FROM topic_links "
+                    "WHERE (src_topic=? AND dst_topic=?) OR (src_topic=? AND dst_topic=?)",
+                    (query_topic, ct, ct, query_topic)
+                ).fetchone()
+                if adj_row and adj_row["cnt"] > 0:
+                    adjacency_map[ct] = True
+
+        # Pre-load helped question set from Channel A (one query for all behavior scores)
+        helped_qa_set = set()
+        if channel_a_ids:
+            bh_all_rows = self._db.conn.execute(
+                f"SELECT DISTINCT helped_qa_id FROM fragment_help_map fhm2 "
+                f"JOIN ms_fragments mf2 ON fhm2.fragment_id = mf2.point_id "
+                f"WHERE mf2.qa_id IN ({','.join('?' * len(list(channel_a_ids)[:15]))})",
+                list(channel_a_ids)[:15]
+            ).fetchall()
+            helped_qa_set = {r["helped_qa_id"] for r in bh_all_rows}
+
+        # Behavior scores: pre-load per candidate (one batch query)
+        candidate_qa_ids = [qa["id"] for qa in candidates]
+        behavior_scores = {}
+        if helped_qa_set and candidate_qa_ids:
+            bh_batch_rows = self._db.conn.execute(
+                f"SELECT mf.qa_id, COUNT(*) as cnt FROM fragment_help_map fhm "
+                f"JOIN ms_fragments mf ON fhm.fragment_id = mf.point_id "
+                f"WHERE mf.qa_id IN ({','.join('?' * len(candidate_qa_ids))})"
+                f" AND fhm.helped_qa_id IN ({','.join('?' * len(helped_qa_set))})"
+                f" GROUP BY mf.qa_id",
+                candidate_qa_ids + list(helped_qa_set)
+            ).fetchall()
+            for r in bh_batch_rows:
+                behavior_scores[r["qa_id"]] = min(1.0, r["cnt"] / 10.0)
+
+        # Mixed ranking (pre-loaded data, zero DB queries)
         for qa in candidates:
             emb_score = qa.get("_score", 0.0)
             qa_topic = qa.get("topic", "")
 
-            # Topic match score
             topic_score = 0.0
             if query_topic and qa_topic:
                 if qa_topic == query_topic:
                     topic_score = 1.0
-                elif query_topic:
-                    adj_check = self._db.conn.execute(
-                        "SELECT COUNT(*) as cnt FROM topic_links "
-                        "WHERE (src_topic=? AND dst_topic=?) OR (src_topic=? AND dst_topic=?)",
-                        (query_topic, qa_topic, qa_topic, query_topic)
-                    ).fetchone()
-                    if adj_check and adj_check["cnt"] > 0:
-                        topic_score = 0.5
+                elif qa_topic in adjacency_map:
+                    topic_score = 0.5
 
-            # Behavior score
-            behavior_score = 0.0
-            if channel_a_ids:
-                bh_row = self._db.conn.execute(
-                    "SELECT COUNT(*) as cnt FROM fragment_help_map fhm "
-                    "JOIN ms_fragments mf ON fhm.fragment_id = mf.point_id "
-                    "WHERE mf.qa_id = ? AND fhm.helped_qa_id IN "
-                    f"(SELECT helped_qa_id FROM fragment_help_map fhm2 "
-                    f"JOIN ms_fragments mf2 ON fhm2.fragment_id = mf2.point_id "
-                    f"WHERE mf2.qa_id IN ({','.join('?' * len(channel_a_ids))}))",
-                    [qa["id"]] + list(channel_a_ids)
-                ).fetchone()
-                behavior_score = min(1.0, (bh_row["cnt"] if bh_row else 0) / 10.0)
+            behavior_score = behavior_scores.get(qa["id"], 0.0)
 
-            # Keyword overlap
             qa_text = (qa.get("question_text", "") + " " + qa.get("answer_text", "")).lower()
             qa_keywords = set(qa_text.split())
             kw_jaccard = len(keyword_query & qa_keywords) / max(len(keyword_query | qa_keywords), 1)
 
-            # Composite score
             composite = (0.35 * emb_score + 0.35 * topic_score
                          + 0.20 * behavior_score + 0.10 * kw_jaccard)
             qa["_score"] = composite

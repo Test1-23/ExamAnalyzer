@@ -280,7 +280,7 @@ def _place_qa_vector_from_kp_scores(db: QADatabase, qa_id: int,
     best_kp = max(kp_scores, key=kp_scores.get)
     best_score = kp_scores[best_kp]
     kp_data = db.get_kp_by_id(best_kp)
-    topic = kp_data.get("name", "") if kp_data else ""
+    topic = (kp_data.get("name") or kp_data.get("id", "")) if kp_data else ""
 
     centrality = 0.8 if best_score >= 0.8 else (0.5 if best_score >= 0.5 else 0.2)
 
