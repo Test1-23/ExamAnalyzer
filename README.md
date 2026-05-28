@@ -46,7 +46,7 @@ export DEEPSEEK_API_KEY="sk-..."
 {subject}_{season}{year}_{type}_{variant}.pdf
 ```
 
-- **subject**: 科目编号（如 `0478`）
+- **subject**: 科目编号（如 `1145`）
 - **season**: 考试季字母（`s` = 夏季, `w` = 冬季, `m` = 春季）
 - **year**: 两位年份（如 `24` = 2024）
 - **type**: 文件类型（`qp` = Question Paper, `ms` = Mark Scheme）
