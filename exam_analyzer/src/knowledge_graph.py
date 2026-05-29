@@ -577,7 +577,7 @@ def fuse_all_edges(db: QADatabase, kp_ids: list[str], debug_cb=None):
         debug_cb(f"  Edge fusion: {len(grouped)} unique pairs from {len(edges)} edges")
 
 
-def run_knowledge_graph(db_path: str, api_url: str, api_key: str,
+def run_knowledge_graph(db, api_url: str, api_key: str,
                         debug_callback=None):
     """Main entry point: cluster QAs, generate KPs, discover edges.
     Called from pipeline after QA processing and topic merge complete.
@@ -592,20 +592,17 @@ def run_knowledge_graph(db_path: str, api_url: str, api_key: str,
 
     _debug("Starting knowledge graph construction...")
 
-    db = QADatabase(db_path)
     if db.count() < 2:
         _debug("Not enough QAs for clustering, skipping")
-        db.close()
         return
 
     client = create_client(api_url, api_key)
 
-    try:
-        # Step 1: Cluster QAs
-        clustering = cluster_qas(db, _debug)
+    # Step 1: Cluster QAs
+    clustering = cluster_qas(db, _debug)
 
-        # Step 2: Generate KP nodes
-        kp_ids = generate_kps(db, clustering, client, _debug)
+    # Step 2: Generate KP nodes
+    kp_ids = generate_kps(db, clustering, client, _debug)
 
         # Step 3: Discover edges (semantic + retrieval)
         if kp_ids:
@@ -638,7 +635,5 @@ def run_knowledge_graph(db_path: str, api_url: str, api_key: str,
 
         _debug(f"Knowledge graph: {len(kp_ids)} KPs from {len(clustering['clusters'])} clusters")
         db.checkpoint("knowledge_graph", db.count(), "completed")
-    finally:
-        db.close()
 
     _debug("Knowledge graph construction complete")

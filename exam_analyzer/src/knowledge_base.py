@@ -6,15 +6,13 @@ QARetriever: embedding-based similarity search over the QA database.
 
 import json
 import sqlite3
-import os
-import threading
 import numpy as np
 from typing import List, Optional
 from collections import defaultdict
 
+from .connection_manager import ConnectionMgr
 from .embedding_cluster import _get_model, MODEL_MAP, _detect_language
 from .logger import get_logger
-from .schema import SCHEMA_DDL, SCHEMA_INDEXES, SCHEMA_MIGRATIONS
 from .models import KPSpec, VerbPatternSpec, KpEdgeSpec, DependencySpec
 
 _log = get_logger()
@@ -45,65 +43,34 @@ class QADatabase:
 
     def __init__(self, db_path: str):
         self.db_path = db_path
-        self._conn: Optional[sqlite3.Connection] = None
-        self._write_lock = threading.Lock()
+        self._db = ConnectionMgr(db_path)
 
     @property
     def conn(self) -> sqlite3.Connection:
-        if self._conn is None:
-            with self._write_lock:
-                if self._conn is None:
-                    os.makedirs(os.path.dirname(self.db_path) or ".", exist_ok=True)
-                    self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
-                    self._conn.execute("PRAGMA journal_mode=WAL")
-                    self._conn.row_factory = sqlite3.Row
-                    self._init_tables()
-        return self._conn
+        return self._db.conn
 
-    def _init_tables(self):
-        for _name, ddl in SCHEMA_DDL:
-            self.conn.execute(ddl)
-        for idx_ddl in SCHEMA_INDEXES:
-            self.conn.execute(idx_ddl)
-        self.conn.commit()
-        self._run_migrations()
+    @property
+    def _write_lock(self):
+        return self._db._write_lock
 
-    def _run_migrations(self):
-        """Apply pending schema migrations in version order."""
-        self.conn.execute(
-            "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY, "
-            "description TEXT, applied_at TEXT DEFAULT (datetime('now')))"
-        )
-        current = self.conn.execute(
-            "SELECT COALESCE(MAX(version), 0) as v FROM schema_version"
-        ).fetchone()["v"]
+    def _commit(self):
+        """Commit only when NOT inside a transaction. Safe to call inside ``with db.transaction()``."""
+        self._db.maybe_commit()
 
-        for version, description, statements in SCHEMA_MIGRATIONS:
-            if version <= current:
-                continue
-            for stmt in statements:
-                try:
-                    self.conn.execute(stmt)
-                except sqlite3.OperationalError as e:
-                    if "duplicate column" not in str(e).lower():
-                        raise
-            self.conn.execute(
-                "INSERT INTO schema_version (version, description) VALUES (?, ?)",
-                (version, description),
-            )
-            _log.info(f"DB migration v{version}: {description}")
-        self.conn.commit()
+    def transaction(self):
+        """Context manager for atomic multi-step writes. See ConnectionMgr.transaction."""
+        return self._db.transaction()
 
     def update_qa_topic(self, qa_id: int, topic: str):
         with self._write_lock:
             self.conn.execute("UPDATE qa_pairs SET topic=? WHERE id=?", (topic, qa_id))
-            self.conn.commit()
+            self._commit()
 
     def rename_topic(self, new_topic: str, old_topic: str) -> int:
         with self._write_lock:
             rows = self.conn.execute(
                 "UPDATE qa_pairs SET topic=? WHERE topic=?", (new_topic, old_topic))
-            self.conn.commit()
+            self._commit()
             return rows.rowcount
 
     def insert(self, question_text: str, answer_text: str,
@@ -129,7 +96,7 @@ class QADatabase:
                VALUES (?, ?, ?, ?, ?, ?, ?)""",
             (question_text, answer_text, knowledge_summary, topic, paper, question_number, parent_question),
         )
-        self.conn.commit()
+        self._commit()
         return cur.lastrowid
 
     def get(self, qa_id: int) -> Optional[dict]:
@@ -176,7 +143,7 @@ class QADatabase:
                 "last_failure_reason=? WHERE id=?",
                 (reason, qa_id),
             )
-        self.conn.commit()
+        self._commit()
 
     def get_topic_groups(self) -> dict[str, list[dict]]:
         groups: dict[str, list[dict]] = defaultdict(list)
@@ -195,7 +162,7 @@ class QADatabase:
                    VALUES (?, ?, ?, ?, ?, ?, ?)""",
                 (stage, model, paper, question_number, latency_ms, int(success), output_size),
             )
-            self.conn.commit()
+            self._commit()
 
     def log_question_feedback(self, qa_id: int, retrieval_count: int = 0,
                               used_qa_count: int = 0, step0_topic: str = "",
@@ -215,7 +182,7 @@ class QADatabase:
                 (qa_id, retrieval_count, used_qa_count, step0_topic, round2_topic,
                  match, covered_count, missed_count, missed_text, ratio, miss_categories),
             )
-            self.conn.commit()
+            self._commit()
 
     def get_missed_by_topic(self, topic: str) -> list[str]:
         """Return all missed_text entries for a given topic, non-empty only."""
@@ -291,13 +258,13 @@ class QADatabase:
                    VALUES (?, ?, ?, ?, datetime('now'))""",
                 (topic, qa_count, qa_ids_hash, content),
             )
-            self.conn.commit()
+            self._commit()
 
     def invalidate_distillation_cache(self, topic: str):
         """Remove a topic from the distillation cache (force re-distill)."""
         with self._write_lock:
             self.conn.execute("DELETE FROM distillation_cache WHERE topic=?", (topic,))
-            self.conn.commit()
+            self._commit()
 
     # ============================================================
     # Evolution history — tracks KP self-improvement events
@@ -314,7 +281,7 @@ class QADatabase:
                    VALUES (?, ?, ?, ?, ?, ?)""",
                 (kp_id, trigger_type, trigger_detail, old_state, new_state, outcome),
             )
-            self.conn.commit()
+            self._commit()
 
     def get_pending_evolutions(self, kp_id: str = None) -> list[dict]:
         """Get pending evolution events, optionally filtered by KP."""
@@ -343,7 +310,7 @@ class QADatabase:
                    VALUES (?, ?, ?, ?)""",
                 (point_id, qa_id, point_text, marks),
             )
-            self.conn.commit()
+            self._commit()
         return point_id
 
     def insert_fragments_batch(self, fragments: list[dict]) -> int:
@@ -358,7 +325,7 @@ class QADatabase:
                     (f["point_id"], f["qa_id"], f["point_text"], f.get("marks", 1)),
                 )
                 count += 1
-            self.conn.commit()
+            self._commit()
         return count
 
     def set_fragment_membership(self, fragment_id: str, topic_id: str,
@@ -372,7 +339,7 @@ class QADatabase:
                     (SELECT topic_id FROM fragment_membership WHERE fragment_id=?))""",
                 (fragment_id, topic_id, loyalty, fragment_id),
             )
-            self.conn.commit()
+            self._commit()
 
     def record_fragment_help_batch(self, fragment_ids: list[str],
                                     helped_qa_id: int, help_effect: float = 0.0):
@@ -385,7 +352,7 @@ class QADatabase:
                        VALUES (?, ?, ?)""",
                     (fid, helped_qa_id, help_effect),
                 )
-            self.conn.commit()
+            self._commit()
 
     def upsert_dynamic_topic(self, topic_id: str, name: str = "",
                                quality: str = "embryonic"):
@@ -397,7 +364,7 @@ class QADatabase:
                    VALUES (?, ?, ?, datetime('now'))""",
                 (topic_id, name, quality),
             )
-            self.conn.commit()
+            self._commit()
 
     def update_topic_stats(self, topic_id: str, mass: int, cohesion: float,
                             stability: float):
@@ -408,7 +375,7 @@ class QADatabase:
                    last_evolved_at=datetime('now') WHERE topic_id=?""",
                 (mass, cohesion, stability, topic_id),
             )
-            self.conn.commit()
+            self._commit()
 
     def set_topic_kp(self, topic_id: str, kp_concept: str, kp_detail: str):
         """Set the KP text for a stable topic."""
@@ -419,7 +386,7 @@ class QADatabase:
                    WHERE topic_id=?""",
                 (kp_concept, kp_detail, topic_id),
             )
-            self.conn.commit()
+            self._commit()
 
     def get_stable_topics(self) -> list[dict]:
         """Return all topics with quality='stable' and their KP text."""
@@ -472,7 +439,7 @@ class QADatabase:
                     WHERE fragment_id=?), 0) + 1, ?, ?, ?, ?, datetime('now'))""",
                 (fragment_id, fragment_id, avg_help_score, topic_coherence, variance, centrality_score),
             )
-            self.conn.commit()
+            self._commit()
 
     def get_fragment_centrality(self, fragment_id: str) -> dict | None:
         row = self.conn.execute(
@@ -497,7 +464,7 @@ class QADatabase:
                     WHERE kp_id=?), 0) + 1, datetime('now'))""",
                 (kp_id, vector.tobytes(), kp_id),
             )
-            self.conn.commit()
+            self._commit()
 
     def get_kp_vector(self, kp_id: str) -> np.ndarray | None:
         row = self.conn.execute(
@@ -512,7 +479,7 @@ class QADatabase:
                    VALUES (?, ?, ?)""",
                 (qa_id, kp_id, relevance_score),
             )
-            self.conn.commit()
+            self._commit()
 
     def get_qa_kp_scores(self, qa_id: int) -> dict[str, float]:
         rows = self.conn.execute(
@@ -528,7 +495,7 @@ class QADatabase:
                    VALUES (?, ?, ?, datetime('now'))""",
                 (topic_id, vector.tobytes(), member_count),
             )
-            self.conn.commit()
+            self._commit()
 
     def get_topic_vector(self, topic_id: str) -> np.ndarray | None:
         row = self.conn.execute(
@@ -545,7 +512,7 @@ class QADatabase:
                    VALUES (?, ?, ?, ?)""",
                 (fragment_id, helped_qa_id, help_effect, help_level),
             )
-            self.conn.commit()
+            self._commit()
 
     def upsert_topic_link(self, src_topic: str, dst_topic: str, count: int = 1):
         """Persist a cross-topic QA reference for See also generation."""
@@ -558,7 +525,7 @@ class QADatabase:
                    ON CONFLICT(src_topic, dst_topic) DO UPDATE SET count = count + ?""",
                 (src_topic, dst_topic, count, count),
             )
-            self.conn.commit()
+            self._commit()
 
     def get_topic_links(self) -> dict:
         """Load all accumulated cross-topic links as {(src, dst): count}."""
@@ -575,7 +542,7 @@ class QADatabase:
                 "INSERT INTO chat_history (session_id, role, content, sources) VALUES (?, ?, ?, ?)",
                 (session_id, role, content, sources),
             )
-            self.conn.commit()
+            self._commit()
 
     def get_chat_history(self, session_id: str, limit: int = 50) -> list[dict]:
         rows = self.conn.execute(
@@ -587,7 +554,7 @@ class QADatabase:
     def clear_chat_history(self, session_id: str):
         with self._write_lock:
             self.conn.execute("DELETE FROM chat_history WHERE session_id = ?", (session_id,))
-            self.conn.commit()
+            self._commit()
 
     # ---- Student memory ----
 
@@ -598,7 +565,7 @@ class QADatabase:
                    VALUES (?, ?, ?, ?)""",
                 (student_id, memory_type, topic, content),
             )
-            self.conn.commit()
+            self._commit()
 
     def get_student_memories(self, student_id: str, limit: int = 20) -> list[dict]:
         rows = self.conn.execute(
@@ -624,7 +591,7 @@ class QADatabase:
                    VALUES (?, ?, ?, ?)""",
                 (student_id, topic, trigger, ctype),
             )
-            self.conn.commit()
+            self._commit()
 
     def upsert_knowledge_state(self, student_id: str, topic: str, state: str):
         with self._write_lock:
@@ -637,7 +604,7 @@ class QADatabase:
                    updated_at = datetime('now')""",
                 (student_id, topic, state),
             )
-            self.conn.commit()
+            self._commit()
 
     def get_knowledge_state(self, student_id: str) -> dict[str, str]:
         rows = self.conn.execute(
@@ -693,7 +660,7 @@ class QADatabase:
                      spec.relationship_type, spec.topic_link_count, spec.embedding_cos,
                      spec.confidence, spec.validated_by),
                 )
-            self.conn.commit()
+            self._commit()
 
     def get_dependencies(self, confidence: str = None) -> list[dict]:
         if confidence:
@@ -771,7 +738,7 @@ class QADatabase:
                  spec.common_missed_patterns, spec.pattern_summary,
                  spec.topic_specific_patterns, spec.verb_family),
             )
-            self.conn.commit()
+            self._commit()
 
     def get_verb_patterns(self) -> list[dict]:
         rows = self.conn.execute(
@@ -805,7 +772,7 @@ class QADatabase:
                  mode_difficulty, avg_miss_rate, int(difficulty_spread),
                  assessment_method),
             )
-            self.conn.commit()
+            self._commit()
 
     def get_topic_difficulty(self, topic: str = None) -> list[dict]:
         if topic:
@@ -857,7 +824,7 @@ class QADatabase:
                    VALUES (?, ?, datetime('now'), ?)""",
                 (task_name, qa_count, status),
             )
-            self.conn.commit()
+            self._commit()
 
     def get_checkpoint(self, task_name: str) -> dict:
         row = self.conn.execute(
@@ -870,7 +837,7 @@ class QADatabase:
             self.conn.execute(
                 "DELETE FROM analysis_checkpoints WHERE task_name = ?", (task_name,)
             )
-            self.conn.commit()
+            self._commit()
 
     # ---- Topic vectors helper (for dependency candidate generation) ----
 
@@ -919,7 +886,7 @@ class QADatabase:
                      spec.typical_marks, spec.cohesion, spec.evidence_count, spec.quality,
                      spec.challenge_history),
                 )
-            self.conn.commit()
+            self._commit()
 
     def get_all_kps(self) -> list[dict]:
         rows = self.conn.execute(
@@ -967,7 +934,7 @@ class QADatabase:
                  spec.semantic_weight, spec.sequential_weight, spec.learning_path_weight,
                  spec.combined_strength, spec.confidence),
             )
-            self.conn.commit()
+            self._commit()
 
     def get_kp_edges(self, kp_id: str = None) -> list[dict]:
         if kp_id:
@@ -1011,7 +978,7 @@ class QADatabase:
                    VALUES (?, ?, ?, ?)""",
                 (qa_id, kp_id, membership_strength, int(is_representative)),
             )
-            self.conn.commit()
+            self._commit()
 
     def get_kp_qas(self, kp_id: str) -> list[dict]:
         rows = self.conn.execute(
@@ -1034,7 +1001,7 @@ class QADatabase:
                    VALUES (?, ?, ?, ?, ?)""",
                 (student_id, kp_id, from_state, to_state, trigger),
             )
-            self.conn.commit()
+            self._commit()
 
     def get_student_trajectory(self, student_id: str, limit: int = 20) -> list[dict]:
         rows = self.conn.execute(
@@ -1056,7 +1023,7 @@ class QADatabase:
                    VALUES (?, ?, ?, ?, ?, ?)""",
                 (kp_id, year, season, occurrence_count, avg_difficulty, trend_summary),
             )
-            self.conn.commit()
+            self._commit()
 
     def get_exam_trends(self, kp_id: str = None) -> list[dict]:
         if kp_id:
@@ -1071,10 +1038,7 @@ class QADatabase:
         return [dict(r) for r in rows]
 
     def close(self):
-        with self._write_lock:
-            if self._conn:
-                self._conn.close()
-                self._conn = None
+        self._db.close()
 
 
 # ============================================================

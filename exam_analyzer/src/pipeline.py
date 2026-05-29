@@ -402,12 +402,12 @@ def _ensure_session(db, display_name: str) -> Optional[int]:
     subject = m.group(1)
     season = season_map.get(m.group(2), "Unknown")
     year = 2000 + int(m.group(3))
-    db.conn.execute(
-        """INSERT OR IGNORE INTO exam_sessions (subject_code, season, year, display_name)
-           VALUES (?, ?, ?, ?)""",
-        (subject, season, year, display_name),
-    )
-    db.conn.commit()
+    with db.transaction():
+        db.conn.execute(
+            """INSERT OR IGNORE INTO exam_sessions (subject_code, season, year, display_name)
+               VALUES (?, ?, ?, ?)""",
+            (subject, season, year, display_name),
+        )
     row = db.conn.execute(
         "SELECT id FROM exam_sessions WHERE display_name = ?", (display_name,)
     ).fetchone()
@@ -563,13 +563,14 @@ def run_pipeline(
                     fragments = _extract_ms_fragments(
                         qa.answer_text, qa_id, client, _debug)
                     if fragments:
-                        db.insert_fragments_batch(fragments)
-                        topic_id = make_topic_id(topic)
-                        db.upsert_dynamic_topic(
-                            topic_id, name=topic, quality="embryonic")
-                        for frag in fragments:
-                            db.set_fragment_membership(
-                                frag["point_id"], topic_id, loyalty=0.5)
+                        with db.transaction():
+                            db.insert_fragments_batch(fragments)
+                            topic_id = make_topic_id(topic)
+                            db.upsert_dynamic_topic(
+                                topic_id, name=topic, quality="embryonic")
+                            for frag in fragments:
+                                db.set_fragment_membership(
+                                    frag["point_id"], topic_id, loyalty=0.5)
                 except Exception as e:
                     _debug(f"  fragment extraction failed for Q{qa.question_number}: {e}")
 
@@ -825,11 +826,11 @@ def run_pipeline(
 
         # Link QAs to exam session for time-dimension queries
         if session_id:
-            db.conn.execute(
-                "UPDATE qa_pairs SET session_id = ? WHERE paper = ? AND session_id IS NULL",
-                (session_id, display_name),
-            )
-            db.conn.commit()
+            with db.transaction():
+                db.conn.execute(
+                    "UPDATE qa_pairs SET session_id = ? WHERE paper = ? AND session_id IS NULL",
+                    (session_id, display_name),
+                )
 
         processed.add(display_name)
         try:
@@ -840,7 +841,7 @@ def run_pipeline(
 
         # Cross-paper consistency check after each paper
         try:
-            run_cross_paper_check(db_path, display_name, debug_callback=_debug)
+            run_cross_paper_check(db, display_name, debug_callback=_debug)
         except Exception as e:
             _debug(f"Cross-paper check failed (non-fatal): {e}")
 
@@ -898,24 +899,24 @@ def run_pipeline(
     # Re-fetch groups after topic merge may have modified topic assignments
     groups = db.get_topic_groups()
     weights = db.get_all_weights()
-    for topic, qas in groups.items():
-        if not topic or topic == "(uncategorized)" or not qas:
-            continue
-        # Representative: highest Beta weight in topic
-        best_qa = max(qas, key=lambda qa: weights.get(qa["id"], {}).get("mean", 0.5))
-        db.conn.execute("UPDATE qa_pairs SET is_representative = 1 WHERE id = ?", (best_qa["id"],))
-        # Cross-topic: references or is referenced by other topics
-        for qa in qas:
-            if any(dst == topic and src != topic for (src, dst) in topic_links) or \
-               any(src == topic and dst != topic for (src, dst) in topic_links):
-                db.conn.execute("UPDATE qa_pairs SET is_cross_topic = 1 WHERE id = ?", (qa["id"],))
-    db.conn.commit()
+    with db.transaction():
+        for topic, qas in groups.items():
+            if not topic or topic == "(uncategorized)" or not qas:
+                continue
+            # Representative: highest Beta weight in topic
+            best_qa = max(qas, key=lambda qa: weights.get(qa["id"], {}).get("mean", 0.5))
+            db.conn.execute("UPDATE qa_pairs SET is_representative = 1 WHERE id = ?", (best_qa["id"],))
+            # Cross-topic: references or is referenced by other topics
+            for qa in qas:
+                if any(dst == topic and src != topic for (src, dst) in topic_links) or \
+                   any(src == topic and dst != topic for (src, dst) in topic_links):
+                    db.conn.execute("UPDATE qa_pairs SET is_cross_topic = 1 WHERE id = ?", (qa["id"],))
 
     # -- Knowledge graph: QA clustering → KP nodes → edge discovery --
     try:
         _debug("Building knowledge graph (clustering QAs into KPs)...")
         _log("Knowledge graph", "Starting")
-        run_knowledge_graph(db_path, api_url, api_key, debug_callback=_debug)
+        run_knowledge_graph(db, api_url, api_key, debug_callback=_debug)
     except Exception as e:
         log_stage_error("Knowledge graph", _debug, e)
 
@@ -942,7 +943,7 @@ def run_pipeline(
     try:
         _debug("Starting offline analysis (verbs, difficulty, dependencies)...")
         _log("Offline analysis", "Starting")
-        run_offline_analysis(db_path, api_url, api_key,
+        run_offline_analysis(db, api_url, api_key,
                              progress_callback=_progress,
                              debug_callback=_debug)
     except Exception as e:
@@ -951,7 +952,7 @@ def run_pipeline(
     # -- Pipeline diagnostics (closed-loop + cross-paper) --
     try:
         _debug("Running pipeline diagnostics (closed-loop)...")
-        run_closed_loop(db_path, api_url, api_key,
+        run_closed_loop(db, api_url, api_key,
                         debug_callback=_debug)
     except Exception as e:
         log_stage_error("Closed-loop diagnostics", _debug, e)

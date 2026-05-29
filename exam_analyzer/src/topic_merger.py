@@ -78,13 +78,13 @@ def merge_similar_topics(db: QADatabase, client, debug) -> None:
                 continue
             key = (src, dst)
             merged[key] = merged.get(key, 0) + r["count"]
-        db.conn.execute("DELETE FROM topic_links")
-        for (src, dst), total in merged.items():
-            db.conn.execute(
-                "INSERT INTO topic_links (src_topic, dst_topic, count) VALUES (?, ?, ?)",
-                (src, dst, total),
-            )
-        db.conn.commit()
+        with db.transaction():
+            db.conn.execute("DELETE FROM topic_links")
+            for (src, dst), total in merged.items():
+                db.conn.execute(
+                    "INSERT INTO topic_links (src_topic, dst_topic, count) VALUES (?, ?, ?)",
+                    (src, dst, total),
+                )
         debug(f"  Topic merge: {len(mergers)} groups, {merged_count} QAs affected, "
               f"{len(all_links)} links -> {len(merged)} after merge")
 

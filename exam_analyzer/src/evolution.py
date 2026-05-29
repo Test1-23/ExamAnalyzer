@@ -17,7 +17,7 @@ def run_evolution_cycle(db: QADatabase, client, debug) -> None:
     """Run self-evolution: detect drift, trigger re-review for degraded KPs."""
     # Phase 2: Fragment migration + topic stats
     try:
-        result = run_phase2_cycle(db.db_path, debug_cb=debug)
+        result = run_phase2_cycle(db, debug_cb=debug)
         if result.get("migrated", 0) > 0:
             debug(f"Evolution: {result['migrated']} fragments migrated")
     except Exception as e:
@@ -39,11 +39,11 @@ def run_evolution_cycle(db: QADatabase, client, debug) -> None:
     ).fetchone()
     if scores_above and scores_above["cnt"] > 0:
         debug("Evolution: fixing inconsistent attempt counters")
-        db.conn.execute(
-            "UPDATE qa_pairs SET success_count = total_attempts "
-            "WHERE success_count > total_attempts"
-        )
-        db.conn.commit()
+        with db.transaction():
+            db.conn.execute(
+                "UPDATE qa_pairs SET success_count = total_attempts "
+                "WHERE success_count > total_attempts"
+            )
 
     # Re-review disputed KPs
     disputed = [dict(k) for k in kps if k["quality"] == "disputed"]
@@ -90,11 +90,11 @@ def run_evolution_cycle(db: QADatabase, client, debug) -> None:
                         new_state=f"evidence_count={current_members}",
                         outcome="queued",
                     )
-                    db.conn.execute(
-                        "UPDATE knowledge_points SET evidence_count=? WHERE id=?",
-                        (current_members, kp["id"]),
-                    )
-                    db.conn.commit()
+                    with db.transaction():
+                        db.conn.execute(
+                            "UPDATE knowledge_points SET evidence_count=? WHERE id=?",
+                            (current_members, kp["id"]),
+                        )
 
     pending_count = len(db.get_pending_evolutions())
     if pending_count:
@@ -213,11 +213,11 @@ def _detect_outlier_qas(db: QADatabase, debug) -> int:
         for i, d in enumerate(distances):
             if d > mean_dist + 2.0 * stdev and d > 0.25:
                 qa = qas[i]
-                db.conn.execute(
-                    "UPDATE qa_pairs SET last_failure_reason=? WHERE id=?",
-                    (f"outlier: dist={d:.3f} from topic '{topic}' centroid", qa["id"]),
-                )
-                db.conn.commit()
+                with db.transaction():
+                    db.conn.execute(
+                        "UPDATE qa_pairs SET last_failure_reason=? WHERE id=?",
+                        (f"outlier: dist={d:.3f} from topic '{topic}' centroid", qa["id"]),
+                    )
                 flagged += 1
 
     return flagged

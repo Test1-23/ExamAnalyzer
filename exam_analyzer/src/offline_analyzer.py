@@ -126,24 +126,24 @@ def _phase1_extract_verbs(qas, db, client, debug_cb, progress_cb):
             verb_list = []
             flash_ok = False
 
-        for v in verb_list:
-            idx = v.get("question_index", -1)
-            if 0 <= idx < len(batch):
-                qa = batch[idx]
-                db.conn.execute(
-                    "UPDATE qa_pairs SET command_verb=?, command_verb_secondary=?, "
-                    "command_verb_inferred=? WHERE id=?",
-                    (v.get("primary_verb", ""), v.get("secondary_verb", ""),
-                     int(v.get("inferred", False)), qa["id"]),
-                )
-        if flash_ok:
-            returned = {v.get("question_index") for v in verb_list}
-            for i, qa in enumerate(batch):
-                if i not in returned:
+        with db.transaction():
+            for v in verb_list:
+                idx = v.get("question_index", -1)
+                if 0 <= idx < len(batch):
+                    qa = batch[idx]
                     db.conn.execute(
-                        "UPDATE qa_pairs SET command_verb='unknown' WHERE id=?", (qa["id"],),
+                        "UPDATE qa_pairs SET command_verb=?, command_verb_secondary=?, "
+                        "command_verb_inferred=? WHERE id=?",
+                        (v.get("primary_verb", ""), v.get("secondary_verb", ""),
+                         int(v.get("inferred", False)), qa["id"]),
                     )
-        db.conn.commit()
+            if flash_ok:
+                returned = {v.get("question_index") for v in verb_list}
+                for i, qa in enumerate(batch):
+                    if i not in returned:
+                        db.conn.execute(
+                            "UPDATE qa_pairs SET command_verb='unknown' WHERE id=?", (qa["id"],),
+                        )
 
     if batches:
         from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -342,7 +342,7 @@ def _phase4_assign_families(db):
             "UPDATE command_verb_patterns SET verb_family = ? WHERE verb = ?",
             (assigned, verb),
         )
-    db.conn.commit()
+    db._commit()
 
 
 # ============================================================
@@ -655,10 +655,11 @@ def _phase3_classify_and_confirm(db, qas, boundaries, client, verb_data, debug_c
         if is_boundary:
             boundary_cases.append(qa)
         else:
-            db.conn.execute(
-                "UPDATE qa_pairs SET difficulty_estimate = ? WHERE id = ?",
-                (label, qa["id"]),
-            )
+            with db.transaction():
+                db.conn.execute(
+                    "UPDATE qa_pairs SET difficulty_estimate = ? WHERE id = ?",
+                    (label, qa["id"]),
+                )
             classification_method[qa["id"]] = "hybrid"
 
     # Flash confirm boundary cases
@@ -684,17 +685,17 @@ def _phase3_classify_and_confirm(db, qas, boundaries, client, verb_data, debug_c
                 debug_cb(f"  Boundary difficulty batch failed: {e}")
                 ratings = []
 
-            for r in ratings:
-                idx = r.get("question_index", -1)
-                if 0 <= idx < len(batch):
-                    qa = batch[idx]
-                    label = r.get("difficulty", "intermediate")
-                    db.conn.execute(
-                        "UPDATE qa_pairs SET difficulty_estimate = ? WHERE id = ?",
-                        (label, qa["id"]),
-                    )
-                    classification_method[qa["id"]] = "flash_boundary"
-        db.conn.commit()
+            with db.transaction():
+                for r in ratings:
+                    idx = r.get("question_index", -1)
+                    if 0 <= idx < len(batch):
+                        qa = batch[idx]
+                        label = r.get("difficulty", "intermediate")
+                        db.conn.execute(
+                            "UPDATE qa_pairs SET difficulty_estimate = ? WHERE id = ?",
+                            (label, qa["id"]),
+                        )
+                        classification_method[qa["id"]] = "flash_boundary"
 
     debug_cb(f"  Difficulty: {len(qas)} QAs classified "
              f"(hybrid={sum(1 for v in classification_method.values() if v in ('hybrid', 'flash_boundary'))}, "
@@ -1000,18 +1001,17 @@ def _phase2_postprocess_dependencies(db, validated, debug_cb):
 
     # Detect remaining cycles (co-requisites)
     cycles_found = 0
-    for pre, dep in list(edges.keys()):
-        rev_key = (dep, pre)
-        if rev_key in edges and (pre, dep) not in redundant and rev_key not in redundant:
-            # Bidirectional dependency → update both to corequisite
-            db.conn.execute(
-                """UPDATE topic_dependencies SET relationship_type = 'corequisite'
-                   WHERE prerequisite = ? AND dependent = ?""",
-                (pre, dep),
-            )
-            cycles_found += 1
-    if cycles_found:
-        db.conn.commit()
+    with db.transaction():
+        for pre, dep in list(edges.keys()):
+            rev_key = (dep, pre)
+            if rev_key in edges and (pre, dep) not in redundant and rev_key not in redundant:
+                # Bidirectional dependency → update both to corequisite
+                db.conn.execute(
+                    """UPDATE topic_dependencies SET relationship_type = 'corequisite'
+                       WHERE prerequisite = ? AND dependent = ?""",
+                    (pre, dep),
+                )
+                cycles_found += 1
         debug_cb(f"  Co-requisite cycles found: {cycles_found}")
 
 
@@ -1060,7 +1060,7 @@ def _write_verb_report(db: QADatabase, output_dir: str, subject_code: str):
     return out_path
 
 
-def run_offline_analysis(db_path: str, api_url: str, api_key: str,
+def run_offline_analysis(db, api_url: str, api_key: str,
                          progress_callback=None, debug_callback=None,
                          output_dir: str = None):
     """Run all three offline analysis tasks in order.
@@ -1080,44 +1080,39 @@ def run_offline_analysis(db_path: str, api_url: str, api_key: str,
 
     _debug("Starting offline analysis pipeline")
 
-    db = QADatabase(db_path)
     if db.count() == 0:
         _debug("No QAs in database, skipping offline analysis")
-        db.close()
         return
 
-    # Derive subject code from db_path: intermediate/{code}_knowledge.db → {code}
+    # Derive subject code from db_path
     subject_code = "unknown"
-    m = re.search(r'(\d+)_knowledge\.db', db_path)
+    m = re.search(r'(\d+)_knowledge\.db', db.db_path)
     if m:
         subject_code = m.group(1)
 
     if output_dir is None:
-        output_dir = os.path.join(os.path.dirname(db_path) or ".", "..", "point")
+        output_dir = os.path.join(os.path.dirname(db.db_path) or ".", "..", "point")
         output_dir = os.path.normpath(output_dir)
 
     client = create_client(api_url, api_key)
 
-    try:
-        # Task 2: Command verb analysis (independent, runs first)
-        _progress(0, "Extracting command verbs...")
-        verb_data = analyze_command_verbs(db, client, _debug, _progress)
+    # Task 2: Command verb analysis (independent, runs first)
+    _progress(0, "Extracting command verbs...")
+    verb_data = analyze_command_verbs(db, client, _debug, _progress)
 
-        # Task 2b: Write verb report
-        report_path = _write_verb_report(db, output_dir, subject_code)
-        if report_path:
-            _debug(f"Verb pattern report: {report_path}")
+    # Task 2b: Write verb report
+    report_path = _write_verb_report(db, output_dir, subject_code)
+    if report_path:
+        _debug(f"Verb pattern report: {report_path}")
 
-        # Task 3: Difficulty assessment (depends on Task 2 for verb_length_percentile)
-        _progress(33, "Assessing difficulty...")
-        difficulty_data = assess_difficulty(db, client, verb_data, _debug, _progress)
+    # Task 3: Difficulty assessment (depends on Task 2 for verb_length_percentile)
+    _progress(33, "Assessing difficulty...")
+    difficulty_data = assess_difficulty(db, client, verb_data, _debug, _progress)
 
-        # Task 1: Dependency discovery (depends on Task 3 for cross_topic signal, Task 2 for verbs)
-        _progress(66, "Discovering dependencies...")
-        discover_dependencies(db, client, _debug, _progress)
+    # Task 1: Dependency discovery (depends on Task 3 for cross_topic signal, Task 2 for verbs)
+    _progress(66, "Discovering dependencies...")
+    discover_dependencies(db, client, _debug, _progress)
 
-        _progress(100, "Offline analysis complete")
-    finally:
-        db.close()
+    _progress(100, "Offline analysis complete")
 
     _debug("Offline analysis pipeline finished")

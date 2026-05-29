@@ -353,17 +353,17 @@ def auto_split_kp(db: QADatabase, kp_id: str, client, debug_cb=None) -> list[str
                      description=sub["concept"], core_concept=sub["concept"],
                      core_detail="", cohesion=kp.get("cohesion"),
                      evidence_count=len(sub_qa_ids), quality="draft"))
-        for qa_id in sub_qa_ids:
-            db.conn.execute(
-                "INSERT OR REPLACE INTO qa_kp_membership (qa_id, kp_id, membership_strength) VALUES (?, ?, 0.8)",
-                (qa_id, new_id),
-            )
-            # Remove from parent KP to avoid duplicate membership
-            db.conn.execute(
-                "DELETE FROM qa_kp_membership WHERE qa_id=? AND kp_id=?",
-                (qa_id, kp_id),
-            )
-        db.conn.commit()
+        with db.transaction():
+            for qa_id in sub_qa_ids:
+                db.conn.execute(
+                    "INSERT OR REPLACE INTO qa_kp_membership (qa_id, kp_id, membership_strength) VALUES (?, ?, 0.8)",
+                    (qa_id, new_id),
+                )
+                # Remove from parent KP to avoid duplicate membership
+                db.conn.execute(
+                    "DELETE FROM qa_kp_membership WHERE qa_id=? AND kp_id=?",
+                    (qa_id, kp_id),
+                )
         new_ids.append(new_id)
 
     if new_ids and debug_cb:
@@ -414,37 +414,37 @@ def auto_merge_kps(db: QADatabase, issues: list[dict], debug_cb=None) -> int:
         if b_score > a_score:
             kp_a, kp_b = kp_b, kp_a
 
-        # Move all QAs from B to A
-        db.conn.execute(
-            "UPDATE qa_kp_membership SET kp_id=? WHERE kp_id=?",
-            (kp_a, kp_b),
-        )
-        # Re-route edges from B to A, deduplicating conflicts
-        edges = db.conn.execute(
-            "SELECT source_kp, target_kp, edge_type, retrieval_weight, semantic_weight, "
-            "sequential_weight, learning_path_weight, combined_strength, confidence "
-            "FROM kp_edges WHERE source_kp=? OR target_kp=?",
-            (kp_b, kp_b),
-        ).fetchall()
-        db.conn.execute("DELETE FROM kp_edges WHERE source_kp=? OR target_kp=?", (kp_b, kp_b))
-        for edge in edges:
-            new_src = kp_a if edge["source_kp"] == kp_b else edge["source_kp"]
-            new_tgt = kp_a if edge["target_kp"] == kp_b else edge["target_kp"]
-            if new_src == new_tgt:
-                continue
-            db.upsert_kp_edge(KpEdgeSpec(
-                source_kp=new_src, target_kp=new_tgt,
-                edge_type=edge["edge_type"],
-                retrieval_weight=edge["retrieval_weight"],
-                semantic_weight=edge["semantic_weight"],
-                sequential_weight=edge["sequential_weight"],
-                learning_path_weight=edge["learning_path_weight"],
-                combined_strength=edge["combined_strength"],
-                confidence=edge["confidence"],
-            ))
-        # Delete B
-        db.conn.execute("DELETE FROM knowledge_points WHERE id=?", (kp_b,))
-        db.conn.commit()
+        with db.transaction():
+            # Move all QAs from B to A
+            db.conn.execute(
+                "UPDATE qa_kp_membership SET kp_id=? WHERE kp_id=?",
+                (kp_a, kp_b),
+            )
+            # Re-route edges from B to A, deduplicating conflicts
+            edges = db.conn.execute(
+                "SELECT source_kp, target_kp, edge_type, retrieval_weight, semantic_weight, "
+                "sequential_weight, learning_path_weight, combined_strength, confidence "
+                "FROM kp_edges WHERE source_kp=? OR target_kp=?",
+                (kp_b, kp_b),
+            ).fetchall()
+            db.conn.execute("DELETE FROM kp_edges WHERE source_kp=? OR target_kp=?", (kp_b, kp_b))
+            for edge in edges:
+                new_src = kp_a if edge["source_kp"] == kp_b else edge["source_kp"]
+                new_tgt = kp_a if edge["target_kp"] == kp_b else edge["target_kp"]
+                if new_src == new_tgt:
+                    continue
+                db.upsert_kp_edge(KpEdgeSpec(
+                    source_kp=new_src, target_kp=new_tgt,
+                    edge_type=edge["edge_type"],
+                    retrieval_weight=edge["retrieval_weight"],
+                    semantic_weight=edge["semantic_weight"],
+                    sequential_weight=edge["sequential_weight"],
+                    learning_path_weight=edge["learning_path_weight"],
+                    combined_strength=edge["combined_strength"],
+                    confidence=edge["confidence"],
+                ))
+            # Delete B
+            db.conn.execute("DELETE FROM knowledge_points WHERE id=?", (kp_b,))
 
         db.record_evolution(
             kp_id=kp_a,

@@ -316,14 +316,14 @@ def apply_student_feedback(db: QADatabase):
                 continue
 
             new_difficulty = rev_difficulty_map[new_level]
-            db.conn.execute(
-                """INSERT OR REPLACE INTO topic_difficulty
-                   (topic, mode_difficulty, qa_count, assessed_at, assessment_method)
-                   VALUES (?, ?, COALESCE((SELECT qa_count FROM topic_difficulty
-                    WHERE topic=?), 1), datetime('now'), 'student_feedback')""",
-                (topic, new_difficulty, topic),
-            )
-            db.conn.commit()
+            with db.transaction():
+                db.conn.execute(
+                    """INSERT OR REPLACE INTO topic_difficulty
+                       (topic, mode_difficulty, qa_count, assessed_at, assessment_method)
+                       VALUES (?, ?, COALESCE((SELECT qa_count FROM topic_difficulty
+                        WHERE topic=?), 1), datetime('now'), 'student_feedback')""",
+                    (topic, new_difficulty, topic),
+                )
             _log.info(
                 f"Student feedback: '{topic}' difficulty {current_level}→{new_level} "
                 f"({count} confusion events)"
@@ -340,17 +340,17 @@ def apply_student_feedback(db: QADatabase):
     for row in mastery_rows:
         if row["cnt"] >= 3:
             # Consolidate: mark KPs in this topic as more stable
-            db.conn.execute(
-                """UPDATE knowledge_points SET quality = 'verified'
-                   WHERE id IN (
-                       SELECT kp_id FROM qa_kp_membership
-                       WHERE qa_id IN (
-                           SELECT id FROM qa_pairs WHERE topic = ?
-                       )
-                   ) AND quality = 'accepted'""",
-                (row["topic"],),
-            )
-            db.conn.commit()
+            with db.transaction():
+                db.conn.execute(
+                    """UPDATE knowledge_points SET quality = 'verified'
+                       WHERE id IN (
+                           SELECT kp_id FROM qa_kp_membership
+                           WHERE qa_id IN (
+                               SELECT id FROM qa_pairs WHERE topic = ?
+                           )
+                       ) AND quality = 'accepted'""",
+                    (row["topic"],),
+                )
 
     _log.info(f"Student feedback applied: {len(confusion_counts)} topics with confusion, "
               f"{len(mastery_rows)} topics with mastery patterns")
@@ -360,7 +360,7 @@ def apply_student_feedback(db: QADatabase):
 # Unified entry points
 # ═══════════════════════════════════════════════════════════════
 
-def run_closed_loop(db_path: str, api_url: str, api_key: str, debug_callback=None):
+def run_closed_loop(db, api_url: str, api_key: str, debug_callback=None):
     """Auto-discover pitfalls and compute exam trends."""
     def _debug(msg):
         if debug_callback:
@@ -368,36 +368,30 @@ def run_closed_loop(db_path: str, api_url: str, api_key: str, debug_callback=Non
         else:
             print(f"[DX] {msg}")
     _debug("Starting closed-loop improvements...")
-    db = QADatabase(db_path)
     kps = db.get_all_kps()
     if not kps:
         _debug("No KPs to improve")
-        db.close()
         return
     client = create_client(api_url, api_key)
-    try:
-        pitfall_count = sum(1 for kp in kps if auto_discover_pitfalls(db, kp["id"], _debug))
-        _debug(f"Auto-pitfalls: {pitfall_count} KPs updated")
-        compute_exam_trends(db, _debug)
-        _debug("Closed-loop improvements complete")
-    finally:
-        db.close()
+    pitfall_count = sum(1 for kp in kps if auto_discover_pitfalls(db, kp["id"], _debug))
+    _debug(f"Auto-pitfalls: {pitfall_count} KPs updated")
+    compute_exam_trends(db, _debug)
+    _debug("Closed-loop improvements complete")
 
 
-def run_cross_paper_check(db_path: str, display_name: str = None, debug_callback=None):
+def run_cross_paper_check(db, display_name: str = None, debug_callback=None):
     """Compute signature, update baselines, detect anomalies."""
     def _debug(msg):
         if debug_callback:
             debug_callback(f"[DX] {msg}")
         else:
             print(f"[DX] {msg}")
-    db = QADatabase(db_path)
-    try:
-        if db.count() < 10:
-            _debug("Too few QAs for cross-paper check, skipping")
-            return
-        sig = compute_paper_signature(db, display_name)
-        if display_name and sig["qa_count"] > 0:
+    if db.count() < 10:
+        _debug("Too few QAs for cross-paper check, skipping")
+        return
+    sig = compute_paper_signature(db, display_name)
+    if display_name and sig["qa_count"] > 0:
+        with db.transaction():
             db.conn.execute(
                 """INSERT OR REPLACE INTO paper_signatures
                    (display_name, qa_count, topic_count, verb_dist, difficulty_dist,
@@ -408,22 +402,19 @@ def run_cross_paper_check(db_path: str, display_name: str = None, debug_callback
                  sig["avg_miss_rate"], sig["avg_answer_length"],
                  sig["topic_purity_avg"], ""),
             )
-            db.conn.commit()
-        update_baselines(db)
-        if display_name:
-            anomalies = detect_anomalies(db, display_name)
-            if anomalies:
+    update_baselines(db)
+    if display_name:
+        anomalies = detect_anomalies(db, display_name)
+        if anomalies:
+            with db.transaction():
                 db.conn.execute(
                     "UPDATE paper_signatures SET anomaly_flags = ? WHERE display_name = ?",
                     (json.dumps(anomalies), display_name),
                 )
-                db.conn.commit()
-                for a in anomalies:
-                    _debug(f"ANOMALY: {a}")
-            else:
-                _debug("No anomalies detected")
-    finally:
-        db.close()
+            for a in anomalies:
+                _debug(f"ANOMALY: {a}")
+        else:
+            _debug("No anomalies detected")
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -594,11 +585,11 @@ def _update_topic_stats(db: QADatabase, debug_cb=None) -> int:
         ).fetchone()
         mass = mass_row["cnt"] if mass_row else 0
         if mass == 0:
-            db.conn.execute(
-                "UPDATE dynamic_topics SET mass=0, quality='dissolved' WHERE topic_id=?",
-                (topic_id,)
-            )
-            db.conn.commit()
+            with db.transaction():
+                db.conn.execute(
+                    "UPDATE dynamic_topics SET mass=0, quality='dissolved' WHERE topic_id=?",
+                    (topic_id,)
+                )
             continue
         frags = db.get_topic_fragments(topic_id)
         if len(frags) < 2:
@@ -618,16 +609,17 @@ def _update_topic_stats(db: QADatabase, debug_cb=None) -> int:
         db.update_topic_stats(topic_id, mass, round(cohesion, 3),
                               round(max(0.0, stability), 3))
         if stability >= 0.8 and mass >= 4:
-            db.conn.execute(
-                "UPDATE dynamic_topics SET quality='forming' WHERE topic_id=? "
-                "AND quality='embryonic'", (topic_id,)
-            )
+            with db.transaction():
+                db.conn.execute(
+                    "UPDATE dynamic_topics SET quality='forming' WHERE topic_id=? "
+                    "AND quality='embryonic'", (topic_id,)
+                )
         elif stability < 0.3 and mass < 3:
-            db.conn.execute(
-                "UPDATE dynamic_topics SET quality='dissolved' WHERE topic_id=?",
-                (topic_id,)
-            )
-        db.conn.commit()
+            with db.transaction():
+                db.conn.execute(
+                    "UPDATE dynamic_topics SET quality='dissolved' WHERE topic_id=?",
+                    (topic_id,)
+                )
         updated += 1
 
     if debug_cb:
@@ -641,63 +633,59 @@ def _update_topic_stats(db: QADatabase, debug_cb=None) -> int:
     return updated
 
 
-def run_phase2_cycle(db_path: str, debug_cb=None) -> dict:
+def run_phase2_cycle(db, debug_cb=None) -> dict:
     """Run Phase 2 self-organization: migration + topic stats + evolution."""
-    db = QADatabase(db_path)
-    try:
-        migrated = _run_migration_cycle(db, debug_cb)
-        updated = _update_topic_stats(db, debug_cb)
+    migrated = _run_migration_cycle(db, debug_cb)
+    updated = _update_topic_stats(db, debug_cb)
 
-        # Phase 3: Topic evolution — only when help data has grown
-        total_help = db.conn.execute(
-            "SELECT COUNT(*) as cnt FROM fragment_help_map"
-        ).fetchone()["cnt"]
+    # Phase 3: Topic evolution — only when help data has grown
+    total_help = db.conn.execute(
+        "SELECT COUNT(*) as cnt FROM fragment_help_map"
+    ).fetchone()["cnt"]
 
-        # Cooldown: only run evolution when help data has grown since last check
-        prev_help = db.conn.execute(
-            "SELECT COALESCE(MAX(qa_count_at_run), 0) as cnt FROM analysis_checkpoints "
-            "WHERE task_name='phase3_evolution'"
-        ).fetchone()["cnt"]
+    # Cooldown: only run evolution when help data has grown since last check
+    prev_help = db.conn.execute(
+        "SELECT COALESCE(MAX(qa_count_at_run), 0) as cnt FROM analysis_checkpoints "
+        "WHERE task_name='phase3_evolution'"
+    ).fetchone()["cnt"]
 
-        splits = merges = dissolved = 0
-        if total_help > prev_help + 20:  # at least 20 new help entries
-            try:
-                splits = _detect_topic_splits(db, debug_cb)
-            except Exception as e:
-                if debug_cb:
-                    debug_cb(f"  Split detection failed: {e}")
-            try:
-                merges = _detect_topic_merges(db, debug_cb)
-            except Exception as e:
-                if debug_cb:
-                    debug_cb(f"  Merge detection failed: {e}")
-            try:
-                dissolved = _process_dissolved_topics(db, debug_cb)
-            except Exception as e:
-                if debug_cb:
-                    debug_cb(f"  Dissolve processing failed: {e}")
-            # Record checkpoint
+    splits = merges = dissolved = 0
+    if total_help > prev_help + 20:  # at least 20 new help entries
+        try:
+            splits = _detect_topic_splits(db, debug_cb)
+        except Exception as e:
+            if debug_cb:
+                debug_cb(f"  Split detection failed: {e}")
+        try:
+            merges = _detect_topic_merges(db, debug_cb)
+        except Exception as e:
+            if debug_cb:
+                debug_cb(f"  Merge detection failed: {e}")
+        try:
+            dissolved = _process_dissolved_topics(db, debug_cb)
+        except Exception as e:
+            if debug_cb:
+                debug_cb(f"  Dissolve processing failed: {e}")
+        # Record checkpoint
+        with db.transaction():
             db.conn.execute(
                 """INSERT OR REPLACE INTO analysis_checkpoints (task_name, qa_count_at_run, status)
                    VALUES ('phase3_evolution', ?, 'completed')""",
                 (total_help,),
             )
-            db.conn.commit()
 
-        # Phase 5: Vector cascade adjustment
-        vectors_adjusted = 0
-        try:
-            v_result = _adjust_vectors_from_feedback(db, debug_cb)
-            vectors_adjusted = sum(v_result.values())
-        except Exception as e:
-            if debug_cb:
-                debug_cb(f"  Vector adjustment failed: {e}")
+    # Phase 5: Vector cascade adjustment
+    vectors_adjusted = 0
+    try:
+        v_result = _adjust_vectors_from_feedback(db, debug_cb)
+        vectors_adjusted = sum(v_result.values())
+    except Exception as e:
+        if debug_cb:
+            debug_cb(f"  Vector adjustment failed: {e}")
 
-        return {"migrated": migrated, "topics_updated": updated,
-                "splits": splits, "merges": merges, "dissolved": dissolved,
-                "vectors_adjusted": vectors_adjusted}
-    finally:
-        db.close()
+    return {"migrated": migrated, "topics_updated": updated,
+            "splits": splits, "merges": merges, "dissolved": dissolved,
+            "vectors_adjusted": vectors_adjusted}
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -800,20 +788,20 @@ def _detect_topic_splits(db: QADatabase, debug_cb=None) -> int:
         ).fetchone()
         old_name = old_name["name"] if old_name else topic_id
 
-        db.upsert_dynamic_topic(new_id_a, name=f"{old_name} (A)", quality="embryonic")
-        db.upsert_dynamic_topic(new_id_b, name=f"{old_name} (B)", quality="embryonic")
-        for fid in s1:
-            db.set_fragment_membership(fid, new_id_a, loyalty=0.5)
-        for fid in s2:
-            db.set_fragment_membership(fid, new_id_b, loyalty=0.5)
+        with db.transaction():
+            db.upsert_dynamic_topic(new_id_a, name=f"{old_name} (A)", quality="embryonic")
+            db.upsert_dynamic_topic(new_id_b, name=f"{old_name} (B)", quality="embryonic")
+            for fid in s1:
+                db.set_fragment_membership(fid, new_id_a, loyalty=0.5)
+            for fid in s2:
+                db.set_fragment_membership(fid, new_id_b, loyalty=0.5)
 
-        db.conn.execute(
-            """UPDATE dynamic_topics SET quality='dissolved',
-               child_topics=?, last_evolved_at=datetime('now')
-               WHERE topic_id=?""",
-            (json.dumps([new_id_a, new_id_b]), topic_id),
-        )
-        db.conn.commit()
+            db.conn.execute(
+                """UPDATE dynamic_topics SET quality='dissolved',
+                   child_topics=?, last_evolved_at=datetime('now')
+                   WHERE topic_id=?""",
+                (json.dumps([new_id_a, new_id_b]), topic_id),
+            )
         splits += 1
         if debug_cb:
             debug_cb(f"  Split: {topic_id} -> [{new_id_a}]({len(s1)}) + "
@@ -888,20 +876,20 @@ def _detect_topic_merges(db: QADatabase, debug_cb=None) -> int:
             ).fetchone()
             merged_name = f"{(name_a['name'] if name_a else a)} + {(name_b['name'] if name_b else b)}"
 
-            db.upsert_dynamic_topic(new_id, name=merged_name, quality="embryonic")
-            for fid in a_frags + b_frags:
-                db.set_fragment_membership(fid, new_id, loyalty=0.5)
+            with db.transaction():
+                db.upsert_dynamic_topic(new_id, name=merged_name, quality="embryonic")
+                for fid in a_frags + b_frags:
+                    db.set_fragment_membership(fid, new_id, loyalty=0.5)
 
-            db.conn.execute(
-                """UPDATE dynamic_topics SET quality='dissolved',
-                   last_evolved_at=datetime('now') WHERE topic_id IN (?, ?)""",
-                (a, b),
-            )
-            db.conn.execute(
-                "UPDATE dynamic_topics SET merged_from=? WHERE topic_id=?",
-                (json.dumps([a, b]), new_id),
-            )
-            db.conn.commit()
+                db.conn.execute(
+                    """UPDATE dynamic_topics SET quality='dissolved',
+                       last_evolved_at=datetime('now') WHERE topic_id IN (?, ?)""",
+                    (a, b),
+                )
+                db.conn.execute(
+                    "UPDATE dynamic_topics SET merged_from=? WHERE topic_id=?",
+                    (json.dumps([a, b]), new_id),
+                )
             merged_set.add(a)
             merged_set.add(b)
             merges += 1
