@@ -310,10 +310,10 @@ def auto_split_kp(db: QADatabase, kp_id: str, client, debug_cb=None) -> list[str
 
     # Build prompt to decide if and how to split
     qa_texts = ""
-    all_qa_ids = []
+    prompt_qa_ids = []
     for i, qa in enumerate(all_qas[:10]):
         qa_texts += f"[{qa['id']}] {qa['question_text'][:200]}\n  A: {qa['answer_text'][:200]}\n\n"
-        all_qa_ids.append(qa["id"])
+        prompt_qa_ids.append(qa["id"])
 
     if lang == 'en':
         sys = "Decide whether this KP should be split into two. Output JSON."

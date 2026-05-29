@@ -707,16 +707,19 @@ def _detect_topic_splits(db: QADatabase, debug_cb=None) -> int:
         if len(frags) < 6:
             continue
 
-        # Batch-load all fragment help data for this topic (one query, not O(n²))
-        placeholders = ",".join("?" * len(frags))
-        help_rows = db.conn.execute(
-            f"SELECT fragment_id, helped_qa_id FROM fragment_help_map "
-            f"WHERE fragment_id IN ({placeholders})",
-            frags
-        ).fetchall()
+        # Batch-load all fragment help data for this topic (chunked for SQLite 999-param limit)
+        from .constants import SQLITE_PARAM_CHUNK
         frag_helps = {}
-        for r in help_rows:
-            frag_helps.setdefault(r["fragment_id"], set()).add(r["helped_qa_id"])
+        for i in range(0, len(frags), SQLITE_PARAM_CHUNK):
+            chunk = frags[i:i + SQLITE_PARAM_CHUNK]
+            placeholders = ",".join("?" * len(chunk))
+            help_rows = db.conn.execute(
+                f"SELECT fragment_id, helped_qa_id FROM fragment_help_map "
+                f"WHERE fragment_id IN ({placeholders})",
+                chunk
+            ).fetchall()
+            for r in help_rows:
+                frag_helps.setdefault(r["fragment_id"], set()).add(r["helped_qa_id"])
 
         # Build pairwise behavioral similarity matrix
         n = len(frags)
