@@ -21,6 +21,7 @@ from .constants import (
     EDGE_TRANSITION_DIVISOR,
 )
 from .logger import get_logger
+from .utils import get_worker_limit
 
 _log = get_logger()
 
@@ -302,7 +303,7 @@ def generate_kps(db: QADatabase, clustering: dict, client, debug_cb=None) -> lis
         return batch_results
 
     from concurrent.futures import ThreadPoolExecutor, as_completed
-    max_w = max(1, min(len(batches), int(os.environ.get("PIPELINE_MAX_WORKERS", "8"))))
+    max_w = get_worker_limit(len(batches), api_heavy=True)
     with ThreadPoolExecutor(max_workers=max_w) as executor:
         futures = {executor.submit(_name_batch, s, c): s for s, c in batches}
         for future in as_completed(futures):

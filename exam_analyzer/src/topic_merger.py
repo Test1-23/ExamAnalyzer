@@ -125,7 +125,7 @@ def _flash_review_merges(ambiguous: list, db: QADatabase, client, debug) -> dict
         a2 = topic_texts.get(t2, "")
         messages = [
             {"role": "system", "content": sys},
-            {"role": "user", "content": usr_tpl % (t1, _escape_pct(a1[:500]), t2, _escape_pct(a2[:500]), cos)},
+            {"role": "user", "content": usr_tpl % (_escape_pct(t1), _escape_pct(a1[:500]), _escape_pct(t2), _escape_pct(a2[:500]), cos)},
         ]
         try:
             result = call_flash(client, messages, max_retries=1, debug_callback=debug)

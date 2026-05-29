@@ -20,6 +20,7 @@ from .logger import get_logger
 _log = get_logger()
 
 from .constants import MAX_ROUNDS, PASS_THRESHOLD
+from .utils import get_worker_limit
 
 
 def _build_challenger_prompt(kp: dict, qas: list[dict], lang: str, prev_challenges: str = ""):
@@ -259,7 +260,7 @@ def cross_kp_consistency(db: QADatabase, kp_ids: list[str], client, debug_cb=Non
     all_issues = []
     if batches:
         from concurrent.futures import ThreadPoolExecutor, as_completed
-        max_w = max(1, min(len(batches), int(os.environ.get("PIPELINE_MAX_WORKERS", "8"))))
+        max_w = get_worker_limit(len(batches), api_heavy=True)
         with ThreadPoolExecutor(max_workers=max_w) as executor:
             futures = {executor.submit(_check_batch, b): b for b in batches}
             for future in as_completed(futures):
@@ -309,26 +310,33 @@ def auto_split_kp(db: QADatabase, kp_id: str, client, debug_cb=None) -> list[str
 
     # Build prompt to decide if and how to split
     qa_texts = ""
+    all_qa_ids = []
     for i, qa in enumerate(all_qas[:10]):
         qa_texts += f"[{qa['id']}] {qa['question_text'][:200]}\n  A: {qa['answer_text'][:200]}\n\n"
+        all_qa_ids.append(qa["id"])
 
     if lang == 'en':
         sys = "Decide whether this KP should be split into two. Output JSON."
+        # Use real DB IDs in the example so Flash returns actual IDs, not position indices
+        example_ids = all_qa_ids[:2] if len(all_qa_ids) >= 2 else all_qa_ids
+        ex_a, ex_b = example_ids[0], example_ids[-1] if len(example_ids) >= 2 else example_ids[0]
         usr = (
             f"KP: [{kp['name']}] — {kp.get('core_concept', '') or kp.get('description', '')}\n\n"
             f"Member QAs:\n{qa_texts}\n"
             "Should this KP be split? If yes, provide two sub-concepts and assign each QA to one.\n"
-            'Return: {"split": true/false, "kp_a": {"concept": "...", "qa_ids": [1,2]}, '
-            '"kp_b": {"concept": "...", "qa_ids": [3,4]}}'
+            f'Return: {{"split": true/false, "kp_a": {{"concept": "...", "qa_ids": [{ex_a}]}}, '
+            f'"kp_b": {{"concept": "...", "qa_ids": [{ex_b}]}}}}'
         )
     else:
         sys = "判断此KP是否应拆分为两个。Output JSON。"
+        example_ids = all_qa_ids[:2] if len(all_qa_ids) >= 2 else all_qa_ids
+        ex_a, ex_b = example_ids[0], example_ids[-1] if len(example_ids) >= 2 else example_ids[0]
         usr = (
             f"KP: [{kp['name']}] — {kp.get('core_concept', '') or kp.get('description', '')}\n\n"
             f"成员QA:\n{qa_texts}\n"
             "此KP是否应拆分？若是，提供两个子概念并分配QA。\n"
-            '返回: {"split": true/false, "kp_a": {"concept": "...", "qa_ids": [1,2]}, '
-            '"kp_b": {"concept": "...", "qa_ids": [3,4]}}'
+            f'返回: {{"split": true/false, "kp_a": {{"concept": "...", "qa_ids": [{ex_a}]}}, '
+            f'"kp_b": {{"concept": "...", "qa_ids": [{ex_b}]}}}}'
         )
 
     messages = [{"role": "system", "content": sys}, {"role": "user", "content": usr}]
@@ -348,7 +356,10 @@ def auto_split_kp(db: QADatabase, kp_id: str, client, debug_cb=None) -> list[str
         if not sub or not sub.get("concept"):
             continue
         new_id = f"{kp_id}s{len(new_ids)}"
-        sub_qa_ids = [int(i) for i in sub.get("qa_ids", []) if isinstance(i, (int, float))]
+        sub_qa_ids = [int(i) for i in sub.get("qa_ids", []) if isinstance(i, (int, float))
+                      and int(i) in all_qa_ids]  # validate: reject position indices, accept only real DB IDs
+        if not sub_qa_ids:
+            continue
         db.upsert_kp(KPSpec(kp_id=new_id, name=f"{kp['name']} ({chr(97+len(new_ids))})",
                      description=sub["concept"], core_concept=sub["concept"],
                      core_detail="", cohesion=kp.get("cohesion"),

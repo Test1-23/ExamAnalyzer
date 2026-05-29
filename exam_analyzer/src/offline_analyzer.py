@@ -17,6 +17,7 @@ from .embedding_cluster import _get_model, detect_content_lang, TOPIC_EMBED_MODE
 from .models import VerbPatternSpec, DependencySpec
 from .prompt_factory import VERB_PATTERN_SUMMARY, DIFFICULTY_RATE, DEPENDENCY_VALIDATE
 from .logger import get_logger
+from .utils import get_worker_limit
 
 _log = get_logger()
 
@@ -147,7 +148,7 @@ def _phase1_extract_verbs(qas, db, client, debug_cb, progress_cb):
 
     if batches:
         from concurrent.futures import ThreadPoolExecutor, as_completed
-        max_w = max(1, min(len(batches), int(os.environ.get("PIPELINE_MAX_WORKERS", "8"))))
+        max_w = get_worker_limit(len(batches), api_heavy=True)
         with ThreadPoolExecutor(max_workers=max_w) as executor:
             futures = [executor.submit(_extract_batch, b) for b in batches]
             for future in as_completed(futures):
@@ -217,16 +218,19 @@ def _compute_verb_stats(verb_groups, db):
         miss_rates = []
         qa_ids = [qa["id"] for qa in qas]
         if qa_ids:
-            placeholders = ",".join("?" * len(qa_ids))
-            rows = db.conn.execute(
-                f"""SELECT missed_count, covered_count FROM question_feedback
-                    WHERE qa_id IN ({placeholders}) AND topic_match = 1""",
-                qa_ids,
-            ).fetchall()
-            for r in rows:
-                total = r["missed_count"] + r["covered_count"]
-                if total > 0:
-                    miss_rates.append(r["missed_count"] / total)
+            from .constants import SQLITE_PARAM_CHUNK
+            for i in range(0, len(qa_ids), SQLITE_PARAM_CHUNK):
+                chunk = qa_ids[i:i + SQLITE_PARAM_CHUNK]
+                placeholders = ",".join("?" * len(chunk))
+                rows = db.conn.execute(
+                    f"""SELECT missed_count, covered_count FROM question_feedback
+                        WHERE qa_id IN ({placeholders}) AND topic_match = 1""",
+                    chunk,
+                ).fetchall()
+                for r in rows:
+                    total = r["missed_count"] + r["covered_count"]
+                    if total > 0:
+                        miss_rates.append(r["missed_count"] / total)
 
         avg_miss_rate = sum(miss_rates) / len(miss_rates) if miss_rates else None
 
@@ -302,7 +306,7 @@ def _phase3_summarize_patterns(verb_groups, verb_stats, db, client, debug_cb):
         return verb
 
     from concurrent.futures import ThreadPoolExecutor, as_completed
-    max_w = max(1, min(len(verbs_to_process), int(os.environ.get("PIPELINE_MAX_WORKERS", "8"))))
+    max_w = get_worker_limit(len(verbs_to_process), api_heavy=True)
     with ThreadPoolExecutor(max_workers=max_w) as executor:
         futures = {executor.submit(_summarize_one, v, q): v for v, q in verbs_to_process}
         for future in as_completed(futures):
@@ -338,11 +342,11 @@ def _phase4_assign_families(db):
         if not assigned:
             # Domain-specific verb: keep as its own family
             assigned = verb.lower()
-        db.conn.execute(
-            "UPDATE command_verb_patterns SET verb_family = ? WHERE verb = ?",
-            (assigned, verb),
-        )
-    db._commit()
+        with db.transaction():
+            db.conn.execute(
+                "UPDATE command_verb_patterns SET verb_family = ? WHERE verb = ?",
+                (assigned, verb),
+            )
 
 
 # ============================================================
@@ -920,7 +924,7 @@ def _phase1_validate_candidates(db, candidates, client, debug_cb):
     validated = []
     if batches:
         from concurrent.futures import ThreadPoolExecutor, as_completed
-        max_w = max(1, min(len(batches), int(os.environ.get("PIPELINE_MAX_WORKERS", "8"))))
+        max_w = get_worker_limit(len(batches), api_heavy=True)
         with ThreadPoolExecutor(max_workers=max_w) as executor:
             futures = {executor.submit(_validate_batch, b): b for b in batches}
             for future in as_completed(futures):
@@ -999,12 +1003,20 @@ def _phase2_postprocess_dependencies(db, validated, debug_cb):
 
     debug_cb(f"  Dependencies stored: {stored} (removed {len(redundant)} transitive)")
 
-    # Detect remaining cycles (co-requisites)
+    # Detect remaining cycles (co-requisites) — check both new candidates and pre-existing DB edges
     cycles_found = 0
     with db.transaction():
         for pre, dep in list(edges.keys()):
             rev_key = (dep, pre)
-            if rev_key in edges and (pre, dep) not in redundant and rev_key not in redundant:
+            has_reverse = rev_key in edges
+            if not has_reverse and (pre, dep) not in redundant:
+                # Check DB for pre-existing reverse edge from a previous pipeline run
+                db_row = db.conn.execute(
+                    "SELECT 1 FROM topic_dependencies WHERE prerequisite=? AND dependent=?",
+                    rev_key,
+                ).fetchone()
+                has_reverse = db_row is not None
+            if has_reverse and (pre, dep) not in redundant and rev_key not in redundant:
                 # Bidirectional dependency → update both to corequisite
                 db.conn.execute(
                     """UPDATE topic_dependencies SET relationship_type = 'corequisite'
