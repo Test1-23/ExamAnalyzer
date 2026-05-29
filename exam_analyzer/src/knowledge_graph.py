@@ -604,36 +604,32 @@ def run_knowledge_graph(db, api_url: str, api_key: str,
     # Step 2: Generate KP nodes
     kp_ids = generate_kps(db, clustering, client, _debug)
 
-        # Step 3: Discover edges (semantic + retrieval)
-        if kp_ids:
-            discover_kp_edges(db, clustering, kp_ids, _debug)
-            # Step 3b: Sequential edges (exam ordering)
-            discover_sequential_edges(db, clustering, kp_ids, _debug)
-            # Step 3c: Learning path edges (student behavior)
-            discover_learning_path_edges(db, kp_ids, _debug)
-            # Step 3d: Fuse multi-signal edges
-            fuse_all_edges(db, kp_ids, _debug)
+    # Step 3: Discover edges (semantic + retrieval)
+    if kp_ids:
+        discover_kp_edges(db, clustering, kp_ids, _debug)
+        discover_sequential_edges(db, clustering, kp_ids, _debug)
+        discover_learning_path_edges(db, kp_ids, _debug)
+        fuse_all_edges(db, kp_ids, _debug)
 
-        # Summary: edges by type
-        edge_counts = db.conn.execute(
-            "SELECT edge_type, COUNT(*) as cnt FROM kp_edges GROUP BY edge_type"
-        ).fetchall()
-        edge_str = ", ".join(f"{r['edge_type']}={r['cnt']}" for r in edge_counts)
-        _debug(f"  [KG] Edges: {edge_str}" if edge_str else "  [KG] Edges: none")
+    # Summary: edges by type
+    edge_counts = db.conn.execute(
+        "SELECT edge_type, COUNT(*) as cnt FROM kp_edges GROUP BY edge_type"
+    ).fetchall()
+    edge_str = ", ".join(f"{r['edge_type']}={r['cnt']}" for r in edge_counts)
+    _debug(f"  [KG] Edges: {edge_str}" if edge_str else "  [KG] Edges: none")
 
-        # Post-fusion duplicate check
-        dup_rows = db.conn.execute(
-            """SELECT source_kp, target_kp, COUNT(*) as cnt
-               FROM kp_edges GROUP BY 1, 2 HAVING COUNT(*) > 1"""
-        ).fetchall()
-        if dup_rows:
-            _debug(f"  [KG] ERROR: {len(dup_rows)} duplicate edge pairs detected!")
-            for r in dup_rows[:5]:
-                _debug(f"    {r['source_kp']} → {r['target_kp']}: {r['cnt']} rows")
-        else:
-            _debug("  [KG] Post-fusion duplicate check: clean (0 duplicates)")
+    # Post-fusion duplicate check
+    dup_rows = db.conn.execute(
+        """SELECT source_kp, target_kp, COUNT(*) as cnt
+           FROM kp_edges GROUP BY 1, 2 HAVING COUNT(*) > 1"""
+    ).fetchall()
+    if dup_rows:
+        duplicates = ", ".join(f"{r['source_kp']}<->{r['target_kp']}(x{r['cnt']})" for r in dup_rows)
+        _debug(f"  [KG] Post-fusion duplicate check: {duplicates}")
+    else:
+        _debug("  [KG] Post-fusion duplicate check: clean (0 duplicates)")
 
-        _debug(f"Knowledge graph: {len(kp_ids)} KPs from {len(clustering['clusters'])} clusters")
-        db.checkpoint("knowledge_graph", db.count(), "completed")
+    _debug(f"Knowledge graph: {len(kp_ids)} KPs from {len(clustering['clusters'])} clusters")
+    db.checkpoint("knowledge_graph", db.count(), "completed")
 
     _debug("Knowledge graph construction complete")
