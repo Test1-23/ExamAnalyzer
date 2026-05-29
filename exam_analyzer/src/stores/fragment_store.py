@@ -42,50 +42,6 @@ class FragmentStore:
             )
             self._mgr.maybe_commit()
 
-    def record_help_batch(self, fragment_ids: list[str], helped_qa_id: int,
-                          help_effect: float = 0.0):
-        with self._mgr._write_lock:
-            for fid in fragment_ids:
-                self._qb.conn.execute(
-                    """INSERT OR REPLACE INTO fragment_help_map
-                       (fragment_id, helped_qa_id, help_effect)
-                       VALUES (?, ?, ?)""",
-                    (fid, helped_qa_id, help_effect),
-                )
-            self._mgr.maybe_commit()
-
-    def get_graph_walk_qa_ids(self, source_qa_ids: list[int], limit: int = 30) -> list[int]:
-        if not source_qa_ids:
-            return []
-        placeholders = ",".join("?" * len(source_qa_ids))
-        rows = self._qb.conn.execute(
-            "SELECT DISTINCT f2.qa_id FROM ("
-            "SELECT DISTINCT fhm1.helped_qa_id FROM fragment_help_map fhm1 "
-            "JOIN ms_fragments mf1 ON fhm1.fragment_id = mf1.point_id "
-            "WHERE mf1.qa_id IN (%s)"
-            ") shared_helps "
-            "JOIN fragment_help_map fhm2 ON shared_helps.helped_qa_id = fhm2.helped_qa_id "
-            "JOIN ms_fragments f2 ON fhm2.fragment_id = f2.point_id "
-            "LIMIT %d" % (placeholders, limit),
-            source_qa_ids,
-        ).fetchall()
-        return [r["qa_id"] for r in rows]
-
-    def get_behavior_scores(self, candidate_ids: list[int],
-                            helped_ids: list[int]) -> dict[int, float]:
-        if not candidate_ids or not helped_ids:
-            return {}
-        c_ph = ",".join("?" * len(candidate_ids))
-        h_ph = ",".join("?" * len(helped_ids))
-        rows = self._qb.conn.execute(
-            "SELECT mf.qa_id, COUNT(*) as cnt FROM fragment_help_map fhm "
-            "JOIN ms_fragments mf ON fhm.fragment_id = mf.point_id "
-            "WHERE mf.qa_id IN (%s) AND fhm.helped_qa_id IN (%s) "
-            "GROUP BY mf.qa_id" % (c_ph, h_ph),
-            candidate_ids + helped_ids,
-        ).fetchall()
-        return {r["qa_id"]: min(1.0, r["cnt"] / 10.0) for r in rows}
-
     # -- Fragment Centrality --
 
     def upsert_centrality(self, fragment_id: str, centrality_score: float,

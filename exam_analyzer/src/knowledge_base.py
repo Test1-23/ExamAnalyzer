@@ -176,10 +176,6 @@ class QADatabase:
                                  loyalty: float = 0.5):
         self.topic.set_fragment_membership(fragment_id, topic_id, loyalty)
 
-    def record_fragment_help_batch(self, fragment_ids: list[str],
-                                    helped_qa_id: int, help_effect: float = 0.0):
-        self.fragment.record_help_batch(fragment_ids, helped_qa_id, help_effect)
-
     def upsert_dynamic_topic(self, topic_id: str, name: str = "",
                                quality: str = "embryonic"):
         self.topic.upsert(topic_id, name=name, quality=quality)
