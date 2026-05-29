@@ -47,6 +47,24 @@ class QADatabase:
         self._db = ConnectionMgr(db_path)
         self._qb = QueryBuilder(self._db)
 
+        from .stores.qa_store import QaStore
+        from .stores.kp_store import KpStore
+        from .stores.topic_store import TopicStore
+        from .stores.fragment_store import FragmentStore
+        from .stores.chat_store import ChatStore
+        from .stores.student_store import StudentStore
+        from .stores.analysis_store import AnalysisStore
+        from .stores.vector_store import VectorStore
+
+        self.qa = QaStore(self._qb)
+        self.kp = KpStore(self._qb)
+        self.topic = TopicStore(self._qb)
+        self.fragment = FragmentStore(self._qb)
+        self.chat = ChatStore(self._qb)
+        self.student = StudentStore(self._qb)
+        self.analysis = AnalysisStore(self._qb)
+        self.vector = VectorStore(self._qb)
+
     @property
     def conn(self) -> sqlite3.Connection:
         return self._db.conn
@@ -64,16 +82,10 @@ class QADatabase:
         return self._db.transaction()
 
     def update_qa_topic(self, qa_id: int, topic: str):
-        with self._write_lock:
-            self.conn.execute("UPDATE qa_pairs SET topic=? WHERE id=?", (topic, qa_id))
-            self._commit()
+        self.qa.update_topic(qa_id, topic)
 
     def rename_topic(self, new_topic: str, old_topic: str) -> int:
-        with self._write_lock:
-            rows = self.conn.execute(
-                "UPDATE qa_pairs SET topic=? WHERE topic=?", (new_topic, old_topic))
-            self._commit()
-            return rows.rowcount
+        return self.qa.rename_topic(new_topic, old_topic)
 
     def insert(self, question_text: str, answer_text: str,
                topic: str = "", paper: str = "",
