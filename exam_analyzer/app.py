@@ -497,8 +497,9 @@ def start_evaluation():
             import glob
             db_files = glob.glob(os.path.join(THIS_DIR, "intermediate", "*_knowledge.db"))
             if not db_files:
-                _eval_state["error"] = "未找到知识库文件，请先运行分析"
-                _eval_state["running"] = False
+                with _eval_lock:
+                    _eval_state["error"] = "未找到知识库文件，请先运行分析"
+                    _eval_state["running"] = False
                 return
             points_file = _find_points_file()
             from eval.feedback_agent import FeedbackAgent
@@ -773,7 +774,7 @@ def index():
 if __name__ == "__main__":
     # Ensure all required directories exist
     for d in [INPUT_DIR, POINTS_DIR, os.path.join(THIS_DIR, "intermediate"),
-              os.path.join(THIS_DIR, "logs"), os.path.join(THIS_DIR, "TestReport")]:
+              os.path.join(THIS_DIR, "TestReport")]:
         os.makedirs(d, exist_ok=True)
 
     # Silence Werkzeug access logs (keep error logs visible)

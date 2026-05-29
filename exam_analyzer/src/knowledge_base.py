@@ -4,7 +4,6 @@ QADatabase: stores question-answer pairs.
 QARetriever: embedding-based similarity search over the QA database.
 """
 
-import json
 import sqlite3
 import numpy as np
 from typing import List, Optional
@@ -398,11 +397,7 @@ class QADatabase:
         return [dict(r) for r in rows]
 
     def get_verb_for_qa(self, qa_id: int) -> dict:
-        row = self.conn.execute(
-            "SELECT command_verb, command_verb_secondary, command_verb_inferred FROM qa_pairs WHERE id = ?",
-            (qa_id,),
-        ).fetchone()
-        return dict(row) if row else {}
+        return self.qa.get_verb_for_qa(qa_id)
 
     # ---- Topic difficulty ----
 
@@ -430,33 +425,10 @@ class QADatabase:
         return [dict(r) for r in rows]
 
     def get_qa_difficulty(self, qa_id: int) -> str:
-        row = self.conn.execute(
-            "SELECT difficulty_estimate FROM qa_pairs WHERE id = ?", (qa_id,)
-        ).fetchone()
-        return row["difficulty_estimate"] if row else ""
+        return self.qa.get_qa_difficulty(qa_id)
 
-    def get_effective_miss_rate(self, qa_id: int) -> float:
-        """Return effective miss rate using only knowledge_gap + insufficient_detail misses.
-        Excludes misinterpretation and retrieval_quality from the difficulty signal.
-        Returns None if no feedback data available."""
-        row = self.conn.execute(
-            "SELECT covered_count, missed_count, miss_categories FROM question_feedback WHERE qa_id = ?",
-            (qa_id,),
-        ).fetchone()
-        if not row:
-            return None
-        total = row["covered_count"] + row["missed_count"]
-        if total == 0:
-            return None
-        cats_json = row["miss_categories"] or ""
-        if cats_json:
-            try:
-                cats = json.loads(cats_json)
-                effective = cats.get("knowledge_gap", 0) + cats.get("insufficient_detail", 0) * 0.5
-                return effective / total
-            except (json.JSONDecodeError, TypeError):
-                pass
-        return row["missed_count"] / total
+    def get_effective_miss_rate(self, qa_id: int) -> Optional[float]:
+        return self.qa.get_effective_miss_rate(qa_id)
 
     # ---- Analysis checkpoints ----
 

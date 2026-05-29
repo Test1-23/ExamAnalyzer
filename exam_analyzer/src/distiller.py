@@ -391,7 +391,7 @@ class Distiller:
         """
         messages = [
             {"role": "system", "content": self._dist_sys},
-            {"role": "user", "content": self._dist_usr % (topic, n_qa, _escape_pct(qa_texts))},
+            {"role": "user", "content": self._dist_usr % (_escape_pct(topic), n_qa, _escape_pct(qa_texts))},
         ]
         try:
             result = call_flash(self._client, messages, max_retries=1, debug_callback=self._debug)
