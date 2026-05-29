@@ -2,8 +2,6 @@
 
 from typing import Optional
 
-from ..models import DependencySpec
-
 
 class QaStore:
     """CRUD operations for the ``qa_pairs`` table."""
@@ -170,20 +168,6 @@ class QaStore:
             self._mgr.maybe_commit()
             return rows.rowcount
 
-    def set_representative(self, qa_id: int):
-        self._qb.conn.execute(
-            "UPDATE qa_pairs SET is_representative = 1 WHERE id = ?", (qa_id,))
-
-    def set_cross_topic(self, qa_id: int):
-        self._qb.conn.execute(
-            "UPDATE qa_pairs SET is_cross_topic = 1 WHERE id = ?", (qa_id,))
-
-    def link_to_session(self, paper: str, session_id: int):
-        self._qb.conn.execute(
-            "UPDATE qa_pairs SET session_id = ? WHERE paper = ? AND session_id IS NULL",
-            (session_id, paper),
-        )
-
     def get_qa_difficulty(self, qa_id: int) -> str:
         row = self._qb.conn.execute(
             "SELECT difficulty_estimate FROM qa_pairs WHERE id = ?", (qa_id,)
@@ -196,23 +180,3 @@ class QaStore:
             "FROM qa_pairs WHERE id = ?", (qa_id,)
         ).fetchone()
         return dict(row) if row else {}
-
-    # ---- Complex queries (used by pipeline.py Phase 2) ----
-
-    def get_paper_feedback_stats(self, paper: str) -> dict | None:
-        row = self._qb.conn.execute(
-            """SELECT SUM(retrieval_count) as tot_ret, SUM(used_qa_count) as tot_used,
-                      SUM(covered_count) as tot_cov, SUM(missed_count) as tot_miss
-               FROM question_feedback WHERE qa_id IN
-               (SELECT id FROM qa_pairs WHERE paper = ?)""",
-            (paper,),
-        ).fetchone()
-        return dict(row) if row else None
-
-    def get_paper_miss_categories(self, paper: str) -> list[dict]:
-        return [dict(r) for r in self._qb.conn.execute(
-            """SELECT miss_categories FROM question_feedback
-               WHERE qa_id IN (SELECT id FROM qa_pairs WHERE paper = ?)
-               AND miss_categories != ''""",
-            (paper,),
-        ).fetchall()]

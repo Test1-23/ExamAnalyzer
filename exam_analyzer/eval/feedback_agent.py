@@ -606,7 +606,7 @@ if __name__ == "__main__":
             api_url = cfg.get("api_url", api_url)
             api_key = cfg.get("api_key", "")
 
-    agent = FeedbackAgent(api_url, api_key, db_files[0], points_files[0])
+    agent = FeedbackAgent(api_url, api_key, QADatabase(db_files[0]), points_files[0])
     report = agent.run_full_evaluation()
     print(report)
 

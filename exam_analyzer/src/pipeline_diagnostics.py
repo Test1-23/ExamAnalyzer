@@ -1000,7 +1000,7 @@ def _adjust_vectors_from_feedback(db: QADatabase, debug_cb=None) -> dict:
             result["fragments_adjusted"] += 1
 
     if centrality_updates:
-        with db._write_lock:
+        with db.transaction():
             db.conn.executemany(
                 """INSERT OR REPLACE INTO fragment_centrality
                    (fragment_id, verification_count, avg_help_score, topic_coherence,
@@ -1009,7 +1009,6 @@ def _adjust_vectors_from_feedback(db: QADatabase, debug_cb=None) -> dict:
                     WHERE fragment_id=?), 0) + 1, ?, ?, ?, ?, datetime('now'))""",
                 [(fid, fid, ahs, tc, var, cs) for fid, cs, ahs, tc, var in centrality_updates],
             )
-            db.conn.commit()
 
     # Layer 2: KP vectors (cascade from member QA embeddings)
     kp_rows = db.conn.execute(

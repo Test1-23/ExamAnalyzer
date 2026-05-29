@@ -237,6 +237,13 @@ def start_analysis():
         _chat_retriever = None
         _chat_retriever_db_path = None
 
+        # Release cached embedding models to free memory
+        try:
+            from src.embedding_cluster import clear_model_cache
+            clear_model_cache()
+        except Exception:
+            pass
+
         analysis_state = {
             "running": True,
             "progress": 0,

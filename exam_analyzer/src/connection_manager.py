@@ -61,9 +61,10 @@ class ConnectionMgr:
             "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY, "
             "description TEXT, applied_at TEXT DEFAULT (datetime('now')))"
         )
-        current = self.conn.execute(
+        row = self.conn.execute(
             "SELECT COALESCE(MAX(version), 0) as v FROM schema_version"
-        ).fetchone()["v"]
+        ).fetchone()
+        current = row["v"] if row else 0
 
         for version, description, statements in SCHEMA_MIGRATIONS:
             if version <= current:

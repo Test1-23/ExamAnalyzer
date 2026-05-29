@@ -133,7 +133,7 @@ def _generate_kp_for_stable_topics(db: QADatabase, client, debug) -> None:
 
         capped = frags[:SQLITE_PARAM_CHUNK]
         frag_texts = db.conn.execute(
-            "SELECT point_text FROM ms_fragments WHERE point_id IN ({})".format(
+            "SELECT point_text FROM ms_fragments WHERE point_id IN (%s)" % (
                 ",".join("?" * len(capped))),
             capped
         ).fetchall()

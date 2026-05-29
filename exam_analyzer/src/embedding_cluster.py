@@ -41,6 +41,12 @@ def _get_model(model_name: str):
     return _MODEL_CACHE[model_name]
 
 
+def clear_model_cache():
+    """Release all cached SentenceTransformer models to free memory."""
+    with _MODEL_CACHE_LOCK:
+        _MODEL_CACHE.clear()
+
+
 # ---------------------------------------------------------------------------
 # Language detection
 # ---------------------------------------------------------------------------

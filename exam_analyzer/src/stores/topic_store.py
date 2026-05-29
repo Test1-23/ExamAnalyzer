@@ -50,16 +50,6 @@ class TopicStore:
         ).fetchall()
         return [dict(r) for r in rows]
 
-    def get_helped_questions(self, topic_id: str) -> set:
-        rows = self._qb.conn.execute(
-            """SELECT DISTINCT fhm.helped_qa_id
-               FROM fragment_help_map fhm
-               JOIN fragment_membership fm ON fhm.fragment_id = fm.fragment_id
-               WHERE fm.topic_id = ?""",
-            (topic_id,),
-        ).fetchall()
-        return {r["helped_qa_id"] for r in rows}
-
     # -- Fragment Membership --
 
     def set_fragment_membership(self, fragment_id: str, topic_id: str, loyalty: float = 0.5):
@@ -95,14 +85,6 @@ class TopicStore:
         rows = self._qb.get_all("topic_links")
         return {(r["src_topic"], r["dst_topic"]): r["count"] for r in rows}
 
-    def get_adjacent_topics(self, topic: str, limit: int = 5) -> list[str]:
-        rows = self._qb.conn.execute(
-            "SELECT DISTINCT dst_topic FROM topic_links WHERE src_topic=? UNION "
-            "SELECT DISTINCT src_topic FROM topic_links WHERE dst_topic=?",
-            (topic, topic),
-        ).fetchall()
-        return [r["dst_topic"] for r in rows[:limit]]
-
     # -- Topic Difficulty --
 
     def upsert_difficulty(self, topic: str, qa_count: int = 0,
@@ -130,30 +112,3 @@ class TopicStore:
         return self._qb.get_all("topic_difficulty", order_by="mode_difficulty, topic")
 
     # -- Topic Dependencies --
-
-    def get_direct_prerequisites(self, topic: str) -> list[dict]:
-        rows = self._qb.conn.execute(
-            """SELECT prerequisite, evidence_score, confidence, relationship_type
-               FROM topic_dependencies WHERE dependent = ?""",
-            (topic,),
-        ).fetchall()
-        return [dict(r) for r in rows]
-
-    def get_transitive_prerequisites(self, topic: str, max_depth: int = 5) -> list[str]:
-        seen = set()
-        frontier = [topic]
-        for _ in range(max_depth):
-            if not frontier:
-                break
-            next_frontier = []
-            for t in frontier:
-                rows = self._qb.conn.execute(
-                    "SELECT prerequisite FROM topic_dependencies WHERE dependent = ?", (t,)
-                ).fetchall()
-                for r in rows:
-                    pre = r["prerequisite"]
-                    if pre not in seen:
-                        seen.add(pre)
-                        next_frontier.append(pre)
-            frontier = next_frontier
-        return list(seen)

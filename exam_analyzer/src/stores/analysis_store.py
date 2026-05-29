@@ -2,8 +2,6 @@
 analysis_checkpoints, evolution_history, exam_sessions, exam_trends, command_verb_patterns,
 topic_dependencies."""
 
-import re
-
 
 class AnalysisStore:
     """Operations for analysis metadata: logs, feedback, checkpoints, evolution, exam data."""
@@ -127,24 +125,6 @@ class AnalysisStore:
             self._qb.delete("analysis_checkpoints", task_name, id_col="task_name")
 
     # -- Exam Sessions --
-
-    def ensure_session(self, display_name: str) -> int | None:
-        m = re.match(r'^(\d+)_([smw])(\d{2})_(\d+)', display_name)
-        if not m:
-            return None
-        season_map = {'s': 'S1', 'w': 'S2', 'm': 'S3'}
-        subject = m.group(1)
-        season = season_map.get(m.group(2), "Unknown")
-        year = 2000 + int(m.group(3))
-        self._qb.conn.execute(
-            """INSERT OR IGNORE INTO exam_sessions (subject_code, season, year, display_name)
-               VALUES (?, ?, ?, ?)""",
-            (subject, season, year, display_name),
-        )
-        row = self._qb.conn.execute(
-            "SELECT id FROM exam_sessions WHERE display_name = ?", (display_name,)
-        ).fetchone()
-        return row["id"] if row else None
 
     def get_exam_stats(self, topic: str) -> list[dict]:
         rows = self._qb.conn.execute(

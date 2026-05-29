@@ -787,42 +787,41 @@ def run_pipeline(
             _debug(f"[{display_name}] KB: {db.count()} entries")
 
             # Phase 2 summary: retrieval quality + miss categories for this paper
-            if not is_first:
-                try:
-                    fb_rows = db.conn.execute(
-                        """SELECT SUM(retrieval_count) as tot_ret, SUM(used_qa_count) as tot_used,
-                                  SUM(covered_count) as tot_cov, SUM(missed_count) as tot_miss
-                           FROM question_feedback WHERE qa_id IN
-                           (SELECT id FROM qa_pairs WHERE paper = ?)""",
-                        (display_name,)
-                    ).fetchone()
-                    if fb_rows and fb_rows["tot_ret"]:
-                        utility = fb_rows["tot_used"] / fb_rows["tot_ret"] * 100 if fb_rows["tot_ret"] else 0
-                        _debug(f"  [Phase2] {display_name}: retrieved={fb_rows['tot_ret']}, "
-                               f"used={fb_rows['tot_used']} (utility={utility:.0f}%), "
-                               f"covered={fb_rows['tot_cov']}, missed={fb_rows['tot_miss']}")
+            try:
+                fb_rows = db.conn.execute(
+                    """SELECT SUM(retrieval_count) as tot_ret, SUM(used_qa_count) as tot_used,
+                              SUM(covered_count) as tot_cov, SUM(missed_count) as tot_miss
+                       FROM question_feedback WHERE qa_id IN
+                       (SELECT id FROM qa_pairs WHERE paper = ?)""",
+                    (display_name,)
+                ).fetchone()
+                if fb_rows and fb_rows["tot_ret"]:
+                    utility = fb_rows["tot_used"] / fb_rows["tot_ret"] * 100 if fb_rows["tot_ret"] else 0
+                    _debug(f"  [Phase2] {display_name}: retrieved={fb_rows['tot_ret']}, "
+                           f"used={fb_rows['tot_used']} (utility={utility:.0f}%), "
+                           f"covered={fb_rows['tot_cov']}, missed={fb_rows['tot_miss']}")
 
-                    # Miss category breakdown
-                    cat_rows = db.conn.execute(
-                        """SELECT miss_categories FROM question_feedback
-                           WHERE qa_id IN (SELECT id FROM qa_pairs WHERE paper = ?)
-                           AND miss_categories != ''""",
-                        (display_name,)
-                    ).fetchall()
-                    if cat_rows:
-                        totals = {"knowledge_gap": 0, "misinterpretation": 0,
-                                  "insufficient_detail": 0, "retrieval_quality": 0}
-                        for r in cat_rows:
-                            try:
-                                cats = json.loads(r["miss_categories"])
-                                for k in totals:
-                                    totals[k] += cats.get(k, 0)
-                            except Exception:
-                                pass
-                        _debug(f"  [MissCat] {display_name}: " +
-                               ", ".join(f"{k}={v}" for k, v in totals.items() if v > 0))
-                except Exception:
-                    pass
+                # Miss category breakdown
+                cat_rows = db.conn.execute(
+                    """SELECT miss_categories FROM question_feedback
+                       WHERE qa_id IN (SELECT id FROM qa_pairs WHERE paper = ?)
+                       AND miss_categories != ''""",
+                    (display_name,)
+                ).fetchall()
+                if cat_rows:
+                    totals = {"knowledge_gap": 0, "misinterpretation": 0,
+                              "insufficient_detail": 0, "retrieval_quality": 0}
+                    for r in cat_rows:
+                        try:
+                            cats = json.loads(r["miss_categories"])
+                            for k in totals:
+                                totals[k] += cats.get(k, 0)
+                        except Exception:
+                            pass
+                    _debug(f"  [MissCat] {display_name}: " +
+                           ", ".join(f"{k}={v}" for k, v in totals.items() if v > 0))
+            except Exception:
+                pass
 
         # Link QAs to exam session for time-dimension queries
         if session_id:
