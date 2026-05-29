@@ -347,8 +347,11 @@ def chat():
     # Build enriched query: original + extracted English keywords
     enriched_query = question + " " + " ".join(keywords)
 
-    # Hybrid retrieval: embedding search with keyword-boosted query
-    similar = retriever.search(enriched_query, threshold=0.5, min_k=2, max_cap=5)
+    # Dual-channel retrieval: embedding + topic structure + behavior graph
+    query_topic = analysis.get("topic", "")
+    similar = retriever.search_dual_channel(
+        enriched_query, threshold=0.5, min_k=2, max_cap=5,
+        query_topic=query_topic)
     relevant = [qa for qa in similar if qa.get("_score", 0) >= 0.5]
 
     # Build QA context
@@ -491,7 +494,7 @@ def start_evaluation():
                 return
             points_file = _find_points_file()
             from eval.feedback_agent import FeedbackAgent
-            agent = FeedbackAgent(config["api_url"], config["api_key"], db_files[0], points_file)
+            agent = FeedbackAgent(config["api_url"], config["api_key"], retriever._db, points_file)
             with _eval_lock:
                 _eval_state["progress"] = 30
             report = agent.run_full_evaluation()
@@ -575,14 +578,9 @@ def topic_questions():
     if retriever is None:
         return jsonify({"error": "知识库未就绪"}), 400
     qs = []
-    extra = "AND difficulty_estimate = ?" if level else ""
-    params = (topic,) + ((level,) if level else ())
-    rows = retriever._db.conn.execute(
-        f"""SELECT question_number, question_text, paper, is_representative, is_cross_topic, difficulty_estimate
-            FROM qa_pairs WHERE topic = ? {extra}
-            ORDER BY is_representative DESC, success_count DESC""",
-        params,
-    ).fetchall()
+    rows = retriever._db.qa.get_by_topic(
+        topic, difficulty=level,
+        order_by="is_representative DESC, success_count DESC")
     for r in rows:
         qs.append({
             "question_number": r["question_number"],

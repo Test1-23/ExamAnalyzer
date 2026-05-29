@@ -11,11 +11,7 @@ def load_kp_from_db(db) -> list[dict]:
     """Read KP data from DB: Dynamic_Topics (priority) + qa_pairs (fallback)."""
     kps = []
     try:
-        dt_rows = db.conn.execute(
-            "SELECT name, kp_concept, kp_detail, mass "
-            "FROM dynamic_topics WHERE quality='stable' AND kp_concept != '' "
-            "ORDER BY mass DESC"
-        ).fetchall()
+        dt_rows = db.topic.get_stable_kps()
         for r in dt_rows:
             kps.append({
                 "topic": r["name"] or "Topic",
@@ -29,13 +25,10 @@ def load_kp_from_db(db) -> list[dict]:
         _log.debug("Failed to load KPs from dynamic_topics", exc_info=True)
 
     try:
-        rows = db.conn.execute("""
-            SELECT topic, knowledge_summary, question_text, answer_text,
-                   is_representative, difficulty_estimate
-            FROM qa_pairs
-            WHERE topic != '' AND topic != '(uncategorized)'
-            ORDER BY is_representative DESC, success_count DESC
-        """).fetchall()
+        rows = db.qa.get_all()
+        # Filter and sort like the original query: exclude empty/uncategorized, sort by representative
+        rows = [r for r in rows if r.get("topic") and r["topic"] != "(uncategorized)"]
+        rows.sort(key=lambda r: (-int(r.get("is_representative", 0)), -int(r.get("success_count", 0))))
         seen_topics = {k["topic"] for k in kps}
         for r in rows:
             topic = r["topic"]

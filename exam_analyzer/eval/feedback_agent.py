@@ -23,10 +23,10 @@ THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 class FeedbackAgent:
     """Evaluates chat assistant quality using real exam data."""
 
-    def __init__(self, api_url: str, api_key: str, db_path: str, points_file: str,
+    def __init__(self, api_url: str, api_key: str, db, points_file: str,
                  chat_base_url: str = "http://127.0.0.1:5000"):
         self.client = create_client(api_url, api_key)
-        self.db = QADatabase(db_path)
+        self.db = db
         self.retriever = QARetriever(self.db)
         self.retriever.rebuild()
         self.points_file = points_file
