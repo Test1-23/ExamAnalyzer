@@ -3,7 +3,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .constants import TOPIC_MERGE_COS_THRESHOLD, TOPIC_MERGE_AMBIGUOUS_THRESHOLD
 from .deepseek_client import call_flash
-from .embedding_cluster import detect_content_lang
+from .embedding_cluster import detect_content_lang, EmbeddingClusterer
 from .knowledge_base import QADatabase
 from .utils import get_worker_limit
 
@@ -24,7 +24,6 @@ def merge_similar_topics(db: QADatabase, client, debug) -> None:
     all_answers = [" ".join(qa["answer_text"] for qa in qas) for _, qas in topics]
 
     try:
-        from .embedding_cluster import EmbeddingClusterer
         clusterer = EmbeddingClusterer(all_answers)
         vecs = clusterer.vectors
         cos_matrix = vecs @ vecs.T
@@ -134,7 +133,14 @@ def _flash_review_merges(ambiguous: list, db: QADatabase, client, debug) -> dict
                 canonical = result.get("canonical", "")
                 if not canonical:
                     return None
-                return (t2, canonical)
+                # Determine which topic to merge (the one NOT chosen as canonical)
+                if canonical.lower() == t1.lower():
+                    return (t2, canonical)
+                elif canonical.lower() == t2.lower():
+                    return (t1, canonical)
+                else:
+                    # Flash returned a new/renamed canonical — merge both into it
+                    return (t1, canonical)
         except Exception as e:
             debug(f"  Flash merge review failed for '{t1}'/'{t2}': {e}")
         return None

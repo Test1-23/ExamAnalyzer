@@ -4,6 +4,7 @@ QADatabase: stores question-answer pairs.
 QARetriever: embedding-based similarity search over the QA database.
 """
 
+import json
 import sqlite3
 import os
 import threading
@@ -502,11 +503,7 @@ class QADatabase:
         row = self.conn.execute(
             "SELECT vector FROM kp_vectors WHERE kp_id=?", (kp_id,)
         ).fetchone()
-        return np.frombuffer(row["vector"]) if row else None
-
-    def get_all_kp_vectors(self) -> dict[str, np.ndarray]:
-        rows = self.conn.execute("SELECT kp_id, vector FROM kp_vectors").fetchall()
-        return {r["kp_id"]: np.frombuffer(r["vector"]) for r in rows}
+        return np.frombuffer(row["vector"], dtype=np.float32) if row else None
 
     def upsert_qa_kp_score(self, qa_id: int, kp_id: str, relevance_score: float):
         with self._write_lock:
@@ -537,7 +534,7 @@ class QADatabase:
         row = self.conn.execute(
             "SELECT vector FROM topic_vectors WHERE topic_id=?", (topic_id,)
         ).fetchone()
-        return np.frombuffer(row["vector"]) if row else None
+        return np.frombuffer(row["vector"], dtype=np.float32) if row else None
 
     def record_fragment_help_with_level(self, fragment_id: str, helped_qa_id: int,
                                          help_effect: float = 0.0, help_level: str = ""):
@@ -843,7 +840,6 @@ class QADatabase:
         cats_json = row["miss_categories"] or ""
         if cats_json:
             try:
-                import json
                 cats = json.loads(cats_json)
                 effective = cats.get("knowledge_gap", 0) + cats.get("insufficient_detail", 0) * 0.5
                 return effective / total

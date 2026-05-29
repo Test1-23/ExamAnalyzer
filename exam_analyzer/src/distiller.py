@@ -11,7 +11,9 @@ import numpy as np
 
 from .constants import MISSED_FILTER_THRESHOLD, MISSED_CLUSTER_THRESHOLD
 from .deepseek_client import call_flash
-from .embedding_cluster import detect_content_lang
+from .embedding_cluster import (
+    detect_content_lang, _get_model, MODEL_MAP, _detect_language, cluster_by_cosine,
+)
 from .knowledge_base import QADatabase
 from .utils import get_worker_limit
 
@@ -35,7 +37,6 @@ def _build_missed_ref(db: QADatabase, topic: str, qas: list[dict], debug) -> str
         return ""
 
     try:
-        from .embedding_cluster import _get_model, MODEL_MAP, _detect_language
         model = _get_model(MODEL_MAP[_detect_language(raw_missed + all_answers)])
         missed_vecs = model.encode(raw_missed, normalize_embeddings=True, convert_to_numpy=True)
         answer_vecs = model.encode(all_answers, normalize_embeddings=True, convert_to_numpy=True)
@@ -57,7 +58,6 @@ def _build_missed_ref(db: QADatabase, topic: str, qas: list[dict], debug) -> str
     except Exception as e:
         debug(f"  missed cluster encoding failed for '{topic}': {e}")
         return ""
-    from .embedding_cluster import cluster_by_cosine
     groups = cluster_by_cosine(fvecs, MISSED_CLUSTER_THRESHOLD, min_group_size=2)
     patterns = [filtered[g[0]] for g in groups]
 

@@ -11,7 +11,7 @@ import re
 from collections import deque
 import numpy as np
 
-from .deepseek_client import call_flash
+from .deepseek_client import call_flash, create_client
 from .knowledge_base import QADatabase
 from .embedding_cluster import _get_model, detect_content_lang, TOPIC_EMBED_MODEL
 from .models import KPSpec, KpEdgeSpec
@@ -578,7 +578,7 @@ def fuse_all_edges(db: QADatabase, kp_ids: list[str], debug_cb=None):
 
 
 def run_knowledge_graph(db_path: str, api_url: str, api_key: str,
-                        debug_callback=None, progress_callback=None):
+                        debug_callback=None):
     """Main entry point: cluster QAs, generate KPs, discover edges.
     Called from pipeline after QA processing and topic merge complete.
 
@@ -598,7 +598,6 @@ def run_knowledge_graph(db_path: str, api_url: str, api_key: str,
         db.close()
         return
 
-    from .deepseek_client import create_client
     client = create_client(api_url, api_key)
 
     try:

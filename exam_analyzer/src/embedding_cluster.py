@@ -5,6 +5,7 @@ _os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
 
 import time
 import threading
+import unicodedata
 import numpy as np
 from typing import List, Optional
 
@@ -48,8 +49,6 @@ def _detect_language(texts: List[str]) -> str:
     """Detect whether texts are primarily Chinese or English.
     Returns 'zh' if >5% CJK characters, else 'en'.
     """
-    import unicodedata
-
     def _is_cjk(ch: str) -> bool:
         if '一' <= ch <= '鿿' or '㐀' <= ch <= '䶿':
             return True

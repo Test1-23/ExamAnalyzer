@@ -11,7 +11,7 @@ import numpy as np
 
 from .deepseek_client import create_client
 from .knowledge_base import QADatabase
-from .embedding_cluster import _get_model, TOPIC_EMBED_MODEL
+from .embedding_cluster import _get_model, TOPIC_EMBED_MODEL, cluster_by_cosine
 from .models import KPSpec
 from .logger import get_logger
 
@@ -52,7 +52,6 @@ def auto_discover_pitfalls(db: QADatabase, kp_id: str, debug_cb=None) -> list[di
         if debug_cb:
             debug_cb(f"  Pitfall embedding failed for {kp_id}: {e}")
         return []
-    from .embedding_cluster import cluster_by_cosine
     groups = cluster_by_cosine(vecs, 0.80, min_group_size=3)
     patterns = [{"pattern": missed_lines[g[0]], "count": len(g)} for g in groups]
     if patterns:
@@ -952,50 +951,6 @@ def _process_dissolved_topics(db: QADatabase, debug_cb=None) -> int:
     return redistributed
 
 
-# ═══════════════════════════════════════════════════════════════
-# Phase 5: Fragment centrality + Graph centroid + Vector cascade
-# ═══════════════════════════════════════════════════════════════
-
-def _update_fragment_centrality(db: QADatabase, fragment_id: str, help_score: float,
-                                  help_level: str, topic_id: str) -> dict:
-    """Update a fragment's centrality scores after LLM feedback."""
-    prev = db.get_fragment_centrality(fragment_id)
-    prev_count = prev["verification_count"] if prev else 0
-    prev_avg = prev["avg_help_score"] if prev else 0.0
-
-    new_count = prev_count + 1
-    new_avg = (prev_avg * prev_count + help_score) / new_count
-
-    # Topic coherence: does this fragment help the same questions as its topic peers?
-    p_helped = db.get_fragment_help_count(fragment_id)
-    topic_helped = db.get_topic_helped_questions(topic_id)
-    if p_helped > 0 and topic_helped:
-        p_rows = db.conn.execute(
-            "SELECT DISTINCT helped_qa_id FROM fragment_help_map WHERE fragment_id=?",
-            (fragment_id,)
-        ).fetchall()
-        p_set = {r["helped_qa_id"] for r in p_rows}
-        coherence = len(p_set & topic_helped) / max(p_helped, 1)
-    else:
-        coherence = 0.0
-
-    # Variance: diversity of question types helped
-    topic_rows = db.conn.execute(
-        """SELECT DISTINCT q.topic FROM fragment_help_map fhm
-           JOIN qa_pairs q ON fhm.helped_qa_id = q.id
-           WHERE fhm.fragment_id = ?""", (fragment_id,)
-    ).fetchall()
-    variance = len(topic_rows) / max(p_helped, 1) if p_helped > 0 else 0
-
-    centrality = (0.3 * min(1.0, new_count / 10)
-                  + 0.4 * new_avg
-                  + 0.3 * coherence)
-
-    db.upsert_fragment_centrality(
-        fragment_id, round(centrality, 3), round(new_avg, 3),
-        round(coherence, 3), round(variance, 3))
-
-    return {"centrality": centrality, "coherence": coherence, "variance": variance}
 
 
 def _compute_graph_centroid(vectors: list[np.ndarray], weights: list[float],

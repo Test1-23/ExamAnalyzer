@@ -8,12 +8,14 @@ Execution order: Task 2 (verbs) -> Task 3 (difficulty) -> Task 1 (dependencies)
 
 import json
 import os
+import re
 from collections import deque
 
 from .deepseek_client import create_client, call_flash
 from .knowledge_base import QADatabase
 from .embedding_cluster import _get_model, detect_content_lang, TOPIC_EMBED_MODEL
 from .models import VerbPatternSpec, DependencySpec
+from .prompt_factory import VERB_PATTERN_SUMMARY, DIFFICULTY_RATE, DEPENDENCY_VALIDATE
 from .logger import get_logger
 
 _log = get_logger()
@@ -253,28 +255,13 @@ def _phase3_summarize_patterns(verb_groups, verb_stats, db, client, debug_cb):
         for i, qa in enumerate(qas[:15]):
             qa_texts += f"Q{i+1}: {qa['question_text']}\nA: {qa['answer_text'][:300]}\n\n"
 
-        if lang == 'en':
-            sys = "You are an exam pattern analyst. Summarize how to answer this type of question. Output JSON."
-            usr = (
-                f"Command verb: '{verb}'\nSample count: {stat['sample_count']}\n"
-                f"Avg answer length: {stat['avg_answer_length']} chars\n"
-                f"Bullet point usage: {stat['bullet_ratio']*100:.0f}%\n"
-                f"Avg miss rate (AI answering without markscheme): {stat.get('avg_miss_rate', 'N/A')}\n\n"
-                f"Example QAs:\n{qa_texts}\n\n"
-                "Summarize: typical_structure, expected_depth, scoring_pattern, common_pitfalls, full_mark_formula.\n"
-                'Return: {"pattern_summary": "concise structured description"}'
-            )
-        else:
-            sys = "你是一个考试规律分析专家。总结这类题目的答题模式。Output JSON。"
-            usr = (
-                f"指令动词: '{verb}'\n样本数: {stat['sample_count']}\n"
-                f"平均答案长度: {stat['avg_answer_length']} 字符\n"
-                f"列表格式使用率: {stat['bullet_ratio']*100:.0f}%\n\n"
-                f"示例问答:\n{qa_texts}\n\n"
-                '返回: {"pattern_summary": "结构化答题规律描述"}'
-            )
-
-        messages = [{"role": "system", "content": sys}, {"role": "user", "content": usr}]
+        messages = VERB_PATTERN_SUMMARY.build(
+            lang=lang, verb=verb, sample_count=stat["sample_count"],
+            avg_answer_length=stat["avg_answer_length"],
+            bullet_pct=f"{stat['bullet_ratio']*100:.0f}%",
+            avg_miss_rate=str(stat.get("avg_miss_rate", "N/A")),
+            qa_texts=qa_texts,
+        )
         try:
             result = call_flash(client, messages, max_retries=1, debug_callback=debug_cb)
             summary = result.get("pattern_summary", "") if isinstance(result, dict) else ""
@@ -466,31 +453,15 @@ def _phase1_difficulty_benchmark(db, qas, client, debug_cb):
         batch = candidates[b:b+batch_size]
         lang = detect_content_lang(" ".join(qa["question_text"] for qa in batch))
 
+        qa_block = ""
         if lang == 'en':
-            sys = (
-                "You are an exam difficulty assessor. Rate each question's difficulty for students. "
-                "Output JSON.\n\n"
-                "Three levels:\n"
-                "- basic: direct recall/recognition/simple formula. Student just needs to remember a definition or perform one operation.\n"
-                "- intermediate: requires understanding relationships between concepts, multi-step reasoning, or accurate rule application.\n"
-                "- advanced: requires synthesizing multiple concepts, evaluation/judgment, or precise complex procedures.\n\n"
-                "Base your rating on the question text and the markscheme answer. Do not rely on your prior knowledge of the subject."
-            )
-            usr = "Rate each question as basic, intermediate, or advanced:\n\n"
-            for i, qa in enumerate(batch):
-                usr += f"[{i}] Q: {qa['question_text']}\nA: {qa['answer_text'][:300]}\n\n"
-            usr += 'Return: {"ratings": [{"question_index": 0, "difficulty": "basic", "reasoning": "..."}, ...]}'
+            qa_block += "Rate each question as basic, intermediate, or advanced:\n\n"
         else:
-            sys = (
-                "你是一个考试难度评估专家。评估每道题对学生的困难程度。Output JSON。\n"
-                "三级：basic（直接回忆/简单操作），intermediate（理解关系/多步推理），advanced（综合/评估/复杂步骤）。"
-            )
-            usr = "评估每道题的难度：\n\n"
-            for i, qa in enumerate(batch):
-                usr += f"[{i}] Q: {qa['question_text']}\nA: {qa['answer_text'][:300]}\n\n"
-            usr += '返回: {"ratings": [{"question_index": 0, "difficulty": "basic", "reasoning": "..."}, ...]}'
+            qa_block += "评估每道题的难度：\n\n"
+        for i, qa in enumerate(batch):
+            qa_block += f"[{i}] Q: {qa['question_text']}\nA: {qa['answer_text'][:300]}\n\n"
 
-        messages = [{"role": "system", "content": sys}, {"role": "user", "content": usr}]
+        messages = DIFFICULTY_RATE.build(lang=lang, qa_block=qa_block)
         try:
             result = call_flash(client, messages, max_retries=1, debug_callback=debug_cb)
             ratings = result.get("ratings", []) if isinstance(result, dict) else []
@@ -510,7 +481,6 @@ def _phase1_difficulty_benchmark(db, qas, client, debug_cb):
 def _phase2_calibrate_signals(db, qas, anchors, anchor_labels, verb_data, debug_cb):
     """Use Flash-anchored QAs to find difficulty thresholds for each signal.
     Uses effective_miss_rate (knowledge_gap + insufficient_detail only), not raw miss_rate."""
-    weights = db.get_all_weights()
 
     def _compute_effective_miss_rate(qa):
         """Only knowledge_gap + insufficient_detail contribute to difficulty.
@@ -663,7 +633,6 @@ def _classify_difficulty(signals, boundaries, margin=0.10):
 def _phase3_classify_and_confirm(db, qas, boundaries, client, verb_data, debug_cb):
     """Classify all QAs using calibrated signals. Flash confirms boundary cases.
     qas: pre-loaded list of all QAs (passed in to avoid repeated db.get_all() calls)."""
-    weights = db.get_all_weights()
     boundary_cases = []
 
     classification_method = {}
@@ -699,20 +668,15 @@ def _phase3_classify_and_confirm(db, qas, boundaries, client, verb_data, debug_c
             batch = boundary_cases[b:b+10]
             lang = detect_content_lang(" ".join(qa["question_text"] for qa in batch))
 
+            qa_block = ""
             if lang == 'en':
-                sys = "You are an exam difficulty assessor. Rate difficulty as basic/intermediate/advanced. Output JSON."
-                usr = "Rate:\n\n"
-                for i, qa in enumerate(batch):
-                    usr += f"[{i}] Q: {qa['question_text']}\nA: {qa['answer_text'][:300]}\n\n"
-                usr += 'Return: {"ratings": [{"question_index": 0, "difficulty": "basic"}, ...]}'
+                qa_block += "Rate:\n\n"
             else:
-                sys = "评估题目难度(basic/intermediate/advanced)。Output JSON。"
-                usr = "评估:\n\n"
-                for i, qa in enumerate(batch):
-                    usr += f"[{i}] Q: {qa['question_text']}\nA: {qa['answer_text'][:300]}\n\n"
-                usr += '返回: {"ratings": [{"question_index": 0, "difficulty": "basic"}, ...]}'
+                qa_block += "评估:\n\n"
+            for i, qa in enumerate(batch):
+                qa_block += f"[{i}] Q: {qa['question_text']}\nA: {qa['answer_text'][:300]}\n\n"
 
-            messages = [{"role": "system", "content": sys}, {"role": "user", "content": usr}]
+            messages = DIFFICULTY_RATE.build(lang=lang, qa_block=qa_block)
             try:
                 result = call_flash(client, messages, max_retries=1, debug_callback=debug_cb)
                 ratings = result.get("ratings", []) if isinstance(result, dict) else []
@@ -913,29 +877,17 @@ def _phase1_validate_candidates(db, candidates, client, debug_cb):
             sample_text += topic_texts.get(pre, "") + " " + topic_texts.get(dep, "") + " "
         lang = detect_content_lang(sample_text[:2000])
 
+        pairs_block = ""
         if lang == 'en':
-            sys = (
-                "You are a curriculum design expert. For each topic pair, determine if topic A "
-                "is a prerequisite for understanding topic B. Output JSON.\n\n"
-                "Scoring: 2=prerequisite, 1=related, 0=independent.\n"
-                "Base your judgment ONLY on the QA texts provided."
-            )
-            usr = "Evaluate these topic pairs:\n\n"
-            for i, (pre, dep, ev_type, strength) in enumerate(batch):
-                usr += (f"Pair {i}: Topic A [{pre}] → Topic B [{dep}]\n"
-                        f"  A QAs: {topic_texts.get(pre, '')[:600]}\n"
-                        f"  B QAs: {topic_texts.get(dep, '')[:600]}\n\n")
-            usr += 'Return: {"pairs": [{"index": 0, "score": 2, "reason": "..."}, ...]}'
+            pairs_block += "Evaluate these topic pairs:\n\n"
         else:
-            sys = "判断每个 topic 对中 A 是否为 B 的前置知识。Output JSON。"
-            usr = "评估以下 topic 对：\n\n"
-            for i, (pre, dep, ev_type, strength) in enumerate(batch):
-                usr += (f"对 {i}: Topic A [{pre}] → Topic B [{dep}]\n"
-                        f"  A QAs: {topic_texts.get(pre, '')[:600]}\n"
-                        f"  B QAs: {topic_texts.get(dep, '')[:600]}\n\n")
-            usr += '返回: {"pairs": [{"index": 0, "score": 2, "reason": "..."}, ...]}'
+            pairs_block += "评估以下 topic 对：\n\n"
+        for i, (pre, dep, ev_type, strength) in enumerate(batch):
+            pairs_block += (f"Pair {i}: Topic A [{pre}] → Topic B [{dep}]\n"
+                            f"  A QAs: {topic_texts.get(pre, '')[:600]}\n"
+                            f"  B QAs: {topic_texts.get(dep, '')[:600]}\n\n")
 
-        messages = [{"role": "system", "content": sys}, {"role": "user", "content": usr}]
+        messages = DEPENDENCY_VALIDATE.build(lang=lang, pairs_block=pairs_block)
         try:
             result = call_flash(client, messages, max_retries=1, debug_callback=debug_cb)
             pairs = result.get("pairs", []) if isinstance(result, dict) else []
@@ -1069,13 +1021,12 @@ def _phase2_postprocess_dependencies(db, validated, debug_cb):
 
 def _write_verb_report(db: QADatabase, output_dir: str, subject_code: str):
     """Write human-readable command verb analysis report to point/{subject}_verb_patterns.txt"""
-    import os as _os
     patterns = db.get_verb_patterns()
     if not patterns:
         return None
 
-    _os.makedirs(output_dir, exist_ok=True)
-    out_path = _os.path.join(output_dir, f"{subject_code}_verb_patterns.txt")
+    os.makedirs(output_dir, exist_ok=True)
+    out_path = os.path.join(output_dir, f"{subject_code}_verb_patterns.txt")
     lines = [f"Command Verb Answer Patterns — {subject_code}", "=" * 60, ""]
 
     for p in patterns:
@@ -1117,9 +1068,6 @@ def run_offline_analysis(db_path: str, api_url: str, api_key: str,
     Called from pipeline.run_pipeline() after main processing completes.
     output_dir: directory for analysis report files (defaults to point/ adjacent to db_path)
     """
-    import os as _os
-    import re
-
     def _debug(msg):
         if debug_callback:
             debug_callback(f"[Offline] {msg}")
@@ -1145,8 +1093,8 @@ def run_offline_analysis(db_path: str, api_url: str, api_key: str,
         subject_code = m.group(1)
 
     if output_dir is None:
-        output_dir = _os.path.join(_os.path.dirname(db_path) or ".", "..", "point")
-        output_dir = _os.path.normpath(output_dir)
+        output_dir = os.path.join(os.path.dirname(db_path) or ".", "..", "point")
+        output_dir = os.path.normpath(output_dir)
 
     client = create_client(api_url, api_key)
 

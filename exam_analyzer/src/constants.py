@@ -21,7 +21,6 @@ _FLT = lambda k, d: float(_STR(k, str(d)))
 # DeepSeek API
 # ============================================================
 FLASH_MODEL = _STR("EXAM_FLASH_MODEL", "deepseek-v4-flash")
-PRO_MODEL = _STR("EXAM_PRO_MODEL", "deepseek-v4-pro")
 DEFAULT_MAX_RETRIES = _INT("EXAM_MAX_RETRIES", 3)
 
 # ============================================================

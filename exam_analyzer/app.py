@@ -492,15 +492,19 @@ def start_evaluation():
             points_file = _find_points_file()
             from eval.feedback_agent import FeedbackAgent
             agent = FeedbackAgent(config["api_url"], config["api_key"], db_files[0], points_file)
-            _eval_state["progress"] = 30
+            with _eval_lock:
+                _eval_state["progress"] = 30
             report = agent.run_full_evaluation()
-            _eval_state["progress"] = 100
-            _eval_state["report"] = report
-            _eval_state["error"] = None
+            with _eval_lock:
+                _eval_state["progress"] = 100
+                _eval_state["report"] = report
+                _eval_state["error"] = None
         except Exception as e:
-            _eval_state["error"] = str(e)
+            with _eval_lock:
+                _eval_state["error"] = str(e)
         finally:
-            _eval_state["running"] = False
+            with _eval_lock:
+                _eval_state["running"] = False
 
     t = threading.Thread(target=_run_eval, daemon=True)
     t.start()
@@ -510,13 +514,17 @@ def start_evaluation():
 @app.route("/api/evaluate/status")
 def evaluation_status():
     """Get evaluation progress and report."""
-    return jsonify(_eval_state)
+    with _eval_lock:
+        state_copy = dict(_eval_state)
+    return jsonify(state_copy)
 
 
 @app.route("/api/timeline")
 def get_timeline():
     """Return the timeline log from the last analysis run."""
-    return jsonify(analysis_state.get("timeline", []))
+    with _state_lock:
+        timeline_copy = list(analysis_state.get("timeline", []))
+    return jsonify(timeline_copy)
 
 
 @app.route("/api/chat/exam-stats")

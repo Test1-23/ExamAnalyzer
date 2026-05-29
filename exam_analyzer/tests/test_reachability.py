@@ -38,7 +38,7 @@ cl = cluster_qas(db, lambda m: print(m))
 if cl['clusters']:
     kp_ids = generate_kps(db, cl, client, lambda m: print(m))
     if kp_ids:
-        discover_kp_edges(db, cl, kp_ids, client, lambda m: print(m))
+        discover_kp_edges(db, cl, kp_ids, lambda m: print(m))
         from src.knowledge_graph import discover_sequential_edges, discover_learning_path_edges, fuse_all_edges
         discover_sequential_edges(db, cl, kp_ids, lambda m: print(m))
         discover_learning_path_edges(db, kp_ids, lambda m: print(m))
@@ -70,7 +70,7 @@ kps = db.get_all_kps()
 from src.pipeline_diagnostics import auto_discover_pitfalls, compute_exam_trends
 for kp in kps[:3]:
     auto_discover_pitfalls(db, kp['id'], lambda m: print(m))
-compute_exam_trends(db, client, lambda m: print(m))
+compute_exam_trends(db, lambda m: print(m))
 
 # ---- Test 5: Question Generator ----
 print('\n=== Test 5: Question Generator ===')

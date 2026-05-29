@@ -5,17 +5,18 @@ and auto-accepts low-risk refinements.
 """
 import numpy as np
 
+from .adversarial_refiner import refine_kp
 from .deepseek_client import call_flash
 from .embedding_cluster import detect_content_lang, _get_model, TOPIC_EMBED_MODEL
 from .constants import SQLITE_PARAM_CHUNK
 from .knowledge_base import QADatabase
+from .pipeline_diagnostics import run_phase2_cycle, apply_student_feedback
 
 
 def run_evolution_cycle(db: QADatabase, client, debug) -> None:
     """Run self-evolution: detect drift, trigger re-review for degraded KPs."""
     # Phase 2: Fragment migration + topic stats
     try:
-        from .pipeline_diagnostics import run_phase2_cycle
         result = run_phase2_cycle(db.db_path, debug_cb=debug)
         if result.get("migrated", 0) > 0:
             debug(f"Evolution: {result['migrated']} fragments migrated")
@@ -48,7 +49,6 @@ def run_evolution_cycle(db: QADatabase, client, debug) -> None:
     disputed = [dict(k) for k in kps if k["quality"] == "disputed"]
     if disputed:
         debug(f"Evolution: {len(disputed)} disputed KPs — queuing for re-review")
-        from .adversarial_refiner import refine_kp
         from concurrent.futures import ThreadPoolExecutor, as_completed
         targets = disputed[:3]
         with ThreadPoolExecutor(max_workers=min(len(targets), 3)) as executor:
@@ -102,7 +102,6 @@ def run_evolution_cycle(db: QADatabase, client, debug) -> None:
 
     # Apply student feedback
     try:
-        from .pipeline_diagnostics import apply_student_feedback
         apply_student_feedback(db)
     except Exception as e:
         debug(f"  Student feedback loop failed (non-fatal): {e}")

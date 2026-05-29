@@ -14,8 +14,13 @@ from typing import Callable, Optional
 
 from .deepseek_client import create_client, call_flash
 from .file_pairer import pair_files
-from .knowledge_base import QADatabase, QARetriever, make_topic_id
+from .adversarial_refiner import auto_split_kp, auto_merge_kps, cross_kp_consistency
+from .knowledge_base import QADatabase, QARetriever, make_topic_id, log_schema_status
+from .knowledge_graph import run_knowledge_graph
+from .models import ExtractedPair, QAPair
+from .offline_analyzer import run_offline_analysis
 from .pdf_extractor import extract_pdf
+from .pipeline_diagnostics import run_closed_loop, run_cross_paper_check
 from .embedding_cluster import detect_content_lang
 from .prompt_factory import FRAGMENT, QA_CLASSIFY
 from .topic_merger import merge_similar_topics
@@ -36,7 +41,6 @@ from .constants import (
 
 def stage2_qa_pairing(pair, client, debug: Callable) -> list:
     """Call Flash once per paper to match questions with answers."""
-    from .models import ExtractedPair, QAPair
     qp_text = pair.qp.full_text
     ms_text = pair.ms.full_text
     debug(f"  QA pairing: {pair.display_name} ({len(qp_text)}c / {len(ms_text)}c)")
@@ -479,7 +483,6 @@ def run_pipeline(
     retriever = QARetriever(db)
 
     # Log DB schema status
-    from .knowledge_base import log_schema_status
     log_schema_status(db, _debug)
 
     processed: set = set()
@@ -526,7 +529,6 @@ def run_pipeline(
             _debug(f"[{display_name}] PDF extraction failed: {e}, skipping")
             continue
 
-        from .models import ExtractedPair
         pair = ExtractedPair(display_name=display_name, qp=qp_pdf, ms=ms_pdf)
         try:
             qa_pairs = stage2_qa_pairing(pair, client, _debug)
@@ -665,7 +667,7 @@ def run_pipeline(
                         qa_ref = top_similar[int(idx) - 1]
                         if not qa_ref.get("_is_kp"):
                             db.record_attempt(qa_ref["id"], success=True)
-                        used_ids.add(qa_ref["id"])
+                            used_ids.add(qa_ref["id"])
                 for qa_ref in top_similar:
                     if qa_ref.get("_is_kp"):
                         continue  # KP entries are not QAs, skip weight recording
@@ -838,7 +840,6 @@ def run_pipeline(
 
         # Cross-paper consistency check after each paper
         try:
-            from .pipeline_diagnostics import run_cross_paper_check
             run_cross_paper_check(db_path, display_name, debug_callback=_debug)
         except Exception as e:
             _debug(f"Cross-paper check failed (non-fatal): {e}")
@@ -912,18 +913,14 @@ def run_pipeline(
 
     # -- Knowledge graph: QA clustering → KP nodes → edge discovery --
     try:
-        from .knowledge_graph import run_knowledge_graph
         _debug("Building knowledge graph (clustering QAs into KPs)...")
         _log("Knowledge graph", "Starting")
-        run_knowledge_graph(db_path, api_url, api_key,
-                            debug_callback=_debug,
-                            progress_callback=_progress)
+        run_knowledge_graph(db_path, api_url, api_key, debug_callback=_debug)
     except Exception as e:
         log_stage_error("Knowledge graph", _debug, e)
 
     # -- KP structural refinement: auto-split + auto-merge (behavior-driven) --
     try:
-        from .adversarial_refiner import auto_split_kp, auto_merge_kps, cross_kp_consistency
         _debug("Running KP structural refinement (split/merge)...")
         kps = db.get_all_kps()
         for kp in kps:
@@ -943,7 +940,6 @@ def run_pipeline(
 
     # -- Offline analysis (command verbs, difficulty, dependencies) --
     try:
-        from .offline_analyzer import run_offline_analysis
         _debug("Starting offline analysis (verbs, difficulty, dependencies)...")
         _log("Offline analysis", "Starting")
         run_offline_analysis(db_path, api_url, api_key,
@@ -954,7 +950,6 @@ def run_pipeline(
 
     # -- Pipeline diagnostics (closed-loop + cross-paper) --
     try:
-        from .pipeline_diagnostics import run_closed_loop
         _debug("Running pipeline diagnostics (closed-loop)...")
         run_closed_loop(db_path, api_url, api_key,
                         debug_callback=_debug)

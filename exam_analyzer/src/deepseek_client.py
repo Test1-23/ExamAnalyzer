@@ -10,7 +10,7 @@ from .logger import get_logger
 _log = get_logger()
 
 
-from .constants import FLASH_MODEL, PRO_MODEL, DEFAULT_MAX_RETRIES
+from .constants import FLASH_MODEL, DEFAULT_MAX_RETRIES
 
 
 def create_client(api_url: str, api_key: str) -> OpenAI:
@@ -84,10 +84,6 @@ def _attempt_call(
             "stream": False,
         }
 
-        if model == PRO_MODEL:
-            kwargs["reasoning_effort"] = "high"
-            kwargs["extra_body"] = {"thinking": {"type": "enabled"}}
-
         if response_format:
             kwargs["response_format"] = response_format
 
@@ -110,11 +106,10 @@ def _call_with_retry(
     messages: list,
     max_retries: int = DEFAULT_MAX_RETRIES,
     debug_callback=None,
-    skip_json: bool = False,
 ) -> dict:
     """
     Universal retry wrapper.
-    1st pass: try with JSON mode (skipped for Pro — thinking is incompatible).
+    1st pass: try with JSON mode.
     2nd pass: fall back to text mode if JSON mode failed.
     Returns parsed dict.
     """
@@ -122,7 +117,7 @@ def _call_with_retry(
     fail_reason = ""
     total_attempts = 0
 
-    json_modes = [False] if skip_json else [True, False]
+    json_modes = [True, False]
     for use_json in json_modes:
         fmt = {"type": "json_object"} if use_json else None
         for attempt in range(max_retries):
