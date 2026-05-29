@@ -312,18 +312,6 @@ class QADatabase:
     # Phase 1: MS Fragments + Dynamic Topics
     # ============================================================
 
-    def insert_fragment(self, point_id: str, qa_id: int, point_text: str,
-                        marks: int = 1) -> str:
-        """Insert a single MS scoring point fragment. Returns point_id."""
-        with self._write_lock:
-            self.conn.execute(
-                """INSERT OR IGNORE INTO ms_fragments (point_id, qa_id, point_text, marks)
-                   VALUES (?, ?, ?, ?)""",
-                (point_id, qa_id, point_text, marks),
-            )
-            self._commit()
-        return point_id
-
     def insert_fragments_batch(self, fragments: list[dict]) -> int:
         """Insert multiple fragments for one QA. Each: {point_id, point_text, marks}.
         Returns count inserted."""

@@ -133,14 +133,13 @@ def _flash_review_merges(ambiguous: list, db: QADatabase, client, debug) -> dict
                 canonical = result.get("canonical", "")
                 if not canonical:
                     return None
-                # Determine which topic to merge (the one NOT chosen as canonical)
                 if canonical.lower() == t1.lower():
-                    return (t2, canonical)
+                    return [(t2, canonical)]
                 elif canonical.lower() == t2.lower():
-                    return (t1, canonical)
+                    return [(t1, canonical)]
                 else:
                     # Flash returned a new/renamed canonical — merge both into it
-                    return (t1, canonical)
+                    return [(t1, canonical), (t2, canonical)]
         except Exception as e:
             debug(f"  Flash merge review failed for '{t1}'/'{t2}': {e}")
         return None
@@ -148,11 +147,11 @@ def _flash_review_merges(ambiguous: list, db: QADatabase, client, debug) -> dict
     with ThreadPoolExecutor(max_workers=get_worker_limit(len(ambiguous), api_heavy=True)) as executor:
         futures = {executor.submit(_review_one, t1, t2, cos): (t1, t2) for t1, t2, cos in ambiguous}
         for future in as_completed(futures):
-            result = future.result()
-            if result:
-                t2, canonical = result
-                if t2 not in mergers or len(canonical) < len(mergers[t2]):
-                    mergers[t2] = canonical
-                debug(f"  Flash merge: '{t2}' -> '{canonical}'")
+            mappings = future.result()
+            if mappings:
+                for t_from, canonical in mappings:
+                    if t_from not in mergers or len(canonical) < len(mergers[t_from]):
+                        mergers[t_from] = canonical
+                    debug(f"  Flash merge: '{t_from}' -> '{canonical}'")
 
     return mergers

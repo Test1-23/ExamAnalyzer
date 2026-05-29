@@ -232,7 +232,7 @@ def update_baselines(db: QADatabase):
                VALUES (?, ?, ?, ?, ?, datetime('now'))""",
             (dim, sum(values) / len(values), med, mad, len(values)),
         )
-    db.conn.commit()
+    db._db.maybe_commit()
     _log.info(f"Baselines updated: {len(dimensions)} dimensions, "
               f"sample counts: {dict(zip(dimensions, sample_counts))}")
 

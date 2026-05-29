@@ -597,14 +597,10 @@ if __name__ == "__main__":
         print("请先运行分析生成知识库和知识点文件")
         exit(1)
 
-    config_file = os.path.join(PROJECT_DIR, "config.json")
-    api_url = "https://api.deepseek.com"
-    api_key = ""
-    if os.path.exists(config_file):
-        with open(config_file, "r") as f:
-            cfg = json.load(f)
-            api_url = cfg.get("api_url", api_url)
-            api_key = cfg.get("api_key", "")
+    from src.config import load_config
+    config = load_config()
+    api_url = config.get("api_url", "https://api.deepseek.com")
+    api_key = config.get("api_key", "")
 
     agent = FeedbackAgent(api_url, api_key, QADatabase(db_files[0]), points_files[0])
     report = agent.run_full_evaluation()

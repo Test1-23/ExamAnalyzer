@@ -571,7 +571,7 @@ def fuse_all_edges(db: QADatabase, kp_ids: list[str], debug_cb=None):
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (src, tgt, etype, rw, sw, sq, lp, round(combined, 3), confidence),
             )
-            db.conn.commit()
+            db._db.maybe_commit()
 
     if debug_cb:
         debug_cb(f"  Edge fusion: {len(grouped)} unique pairs from {len(edges)} edges")
