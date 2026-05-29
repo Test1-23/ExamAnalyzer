@@ -37,3 +37,7 @@ exam_analyzer/分析报告*.md
 # Root-level generated files
 intermediate/
 logs/
+
+# Project planning docs (local only)
+require.md
+feedback.md
