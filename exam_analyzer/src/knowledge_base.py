@@ -14,6 +14,7 @@ from .connection_manager import ConnectionMgr
 from .embedding_cluster import _get_model, MODEL_MAP, _detect_language
 from .logger import get_logger
 from .models import KPSpec, VerbPatternSpec, KpEdgeSpec, DependencySpec
+from .query_builder import QueryBuilder
 
 _log = get_logger()
 
@@ -44,6 +45,7 @@ class QADatabase:
     def __init__(self, db_path: str):
         self.db_path = db_path
         self._db = ConnectionMgr(db_path)
+        self._qb = QueryBuilder(self._db)
 
     @property
     def conn(self) -> sqlite3.Connection:
@@ -100,12 +102,10 @@ class QADatabase:
         return cur.lastrowid
 
     def get(self, qa_id: int) -> Optional[dict]:
-        row = self.conn.execute("SELECT * FROM qa_pairs WHERE id=?", (qa_id,)).fetchone()
-        return dict(row) if row else None
+        return self._qb.get("qa_pairs", qa_id)
 
     def get_all(self) -> list[dict]:
-        rows = self.conn.execute("SELECT * FROM qa_pairs ORDER BY id").fetchall()
-        return [dict(r) for r in rows]
+        return self._qb.get_all("qa_pairs", order_by="id")
 
     def get_by_ids(self, ids: list[int]) -> list[dict]:
         if not ids:
@@ -123,8 +123,7 @@ class QADatabase:
         return [row_map[i] for i in ids if i in row_map]
 
     def count(self) -> int:
-        row = self.conn.execute("SELECT COUNT(*) as cnt FROM qa_pairs").fetchone()
-        return row["cnt"] if row else 0
+        return self._qb.count("qa_pairs")
 
     def record_attempt(self, qa_id: int, success: bool, reason: str = ""):
         with self._write_lock:
@@ -390,27 +389,17 @@ class QADatabase:
 
     def get_stable_topics(self) -> list[dict]:
         """Return all topics with quality='stable' and their KP text."""
-        rows = self.conn.execute(
-            "SELECT topic_id, name, kp_concept, kp_detail, mass, cohesion, stability "
-            "FROM dynamic_topics WHERE quality='stable'"
-        ).fetchall()
+        rows = self._qb.get_where("dynamic_topics", quality="stable")
         return [dict(r) for r in rows]
 
     def get_topic_fragments(self, topic_id: str) -> list[str]:
         """Return fragment IDs belonging to a topic."""
-        rows = self.conn.execute(
-            "SELECT fragment_id FROM fragment_membership WHERE topic_id=?",
-            (topic_id,),
-        ).fetchall()
+        rows = self._qb.get_where("fragment_membership", topic_id=topic_id)
         return [r["fragment_id"] for r in rows]
 
     def get_fragment_help_count(self, fragment_id: str) -> int:
         """Return how many questions a fragment has helped."""
-        row = self.conn.execute(
-            "SELECT COUNT(*) as cnt FROM fragment_help_map WHERE fragment_id=?",
-            (fragment_id,),
-        ).fetchone()
-        return row["cnt"] if row else 0
+        return self._qb.count("fragment_help_map", fragment_id=fragment_id)
 
     def get_topic_helped_questions(self, topic_id: str) -> set:
         """Return the set of QA IDs that this topic's fragments helped."""
@@ -538,23 +527,17 @@ class QADatabase:
 
     def save_chat_message(self, session_id: str, role: str, content: str, sources: str = ""):
         with self._write_lock:
-            self.conn.execute(
-                "INSERT INTO chat_history (session_id, role, content, sources) VALUES (?, ?, ?, ?)",
-                (session_id, role, content, sources),
-            )
-            self._commit()
+            self._qb.insert("chat_history",
+                           session_id=session_id, role=role, content=content, sources=sources)
 
     def get_chat_history(self, session_id: str, limit: int = 50) -> list[dict]:
-        rows = self.conn.execute(
-            "SELECT role, content, sources FROM chat_history WHERE session_id = ? ORDER BY created_at ASC LIMIT ?",
-            (session_id, limit),
-        ).fetchall()
+        rows = self._qb.get_where("chat_history", session_id=session_id,
+                                  order_by="created_at ASC", limit=limit)
         return [{"role": r["role"], "content": r["content"], "sources": r["sources"]} for r in rows]
 
     def clear_chat_history(self, session_id: str):
         with self._write_lock:
-            self.conn.execute("DELETE FROM chat_history WHERE session_id = ?", (session_id,))
-            self._commit()
+            self._qb.delete_where("chat_history", session_id=session_id)
 
     # ---- Student memory ----
 
