@@ -485,10 +485,11 @@ def start_evaluation():
         retriever = _get_chat_retriever()
         if retriever is None:
             return jsonify({"error": "知识库尚未建立"}), 400
+        # Validate config before setting running=True to prevent state leak
+        config = load_config()
+        if not config.get("api_url") or not config.get("api_key"):
+            return jsonify({"error": "请先配置 API"}), 400
         _eval_state = {"running": True, "progress": 0, "report": "", "error": None}
-    config = load_config()
-    if not config.get("api_url") or not config.get("api_key"):
-        return jsonify({"error": "请先配置 API"}), 400
 
     def _run_eval():
         global _eval_state
@@ -619,7 +620,7 @@ def practice_generate():
             db_files[0], data["kp_id"],
             count=data.get("count", 3),
             difficulty=data.get("difficulty", "intermediate"),
-            api_url=config["api_url"], api_key=config.get("api_key", ""),
+            api_url=config.get("api_url", ""), api_key=config.get("api_key", ""),
         )
         return jsonify({"questions": questions})
     except Exception as e:

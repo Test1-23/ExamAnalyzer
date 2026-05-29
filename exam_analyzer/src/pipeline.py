@@ -408,9 +408,9 @@ def _ensure_session(db, display_name: str) -> Optional[int]:
                VALUES (?, ?, ?, ?)""",
             (subject, season, year, display_name),
         )
-    row = db.conn.execute(
-        "SELECT id FROM exam_sessions WHERE display_name = ?", (display_name,)
-    ).fetchone()
+        row = db.conn.execute(
+            "SELECT id FROM exam_sessions WHERE display_name = ?", (display_name,)
+        ).fetchone()
     return row["id"] if row else None
 
 

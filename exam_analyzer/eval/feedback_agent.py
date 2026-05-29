@@ -5,6 +5,15 @@ assistant via HTTP API, and produces structured improvement reports.
 """
 
 import os
+import sys as _sys
+
+# Ensure project root is on sys.path so `from src.xxx` imports work
+# both when imported by app.py and when run standalone via `python eval/feedback_agent.py`
+THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+_PROJECT_DIR = os.path.dirname(THIS_DIR)  # eval/ -> exam_analyzer/
+if _PROJECT_DIR not in _sys.path:
+    _sys.path.insert(0, _PROJECT_DIR)
+
 import json
 import re
 import time
@@ -16,8 +25,6 @@ from src.knowledge_base import QADatabase, QARetriever
 from src.deepseek_client import create_client, call_flash
 from src.embedding_cluster import _get_model, MODEL_MAP, _detect_language
 import numpy as np
-
-THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 class FeedbackAgent:
@@ -582,14 +589,9 @@ class FeedbackAgent:
 # ================================================================
 
 if __name__ == "__main__":
-    import sys
     import glob
 
-    # Ensure project root is on sys.path for `from src.xxx` imports
-    PROJECT_DIR = os.path.dirname(THIS_DIR)  # eval/ → exam_analyzer/
-    if PROJECT_DIR not in sys.path:
-        sys.path.insert(0, PROJECT_DIR)
-
+    PROJECT_DIR = _PROJECT_DIR  # set at module top
     db_files = glob.glob(os.path.join(PROJECT_DIR, "intermediate", "*_knowledge.db"))
     points_files = glob.glob(os.path.join(PROJECT_DIR, "point", "*_points.txt"))
 

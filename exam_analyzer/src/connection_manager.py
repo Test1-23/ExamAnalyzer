@@ -86,10 +86,6 @@ class ConnectionMgr:
     # Transaction
     # ------------------------------------------------------------------
 
-    @property
-    def in_transaction(self) -> bool:
-        return self._tx_depth > 0
-
     def maybe_commit(self):
         """Commit only when NOT inside a transaction context.
         Individual CRUD methods call this instead of ``self.conn.commit()``

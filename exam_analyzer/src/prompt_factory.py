@@ -103,12 +103,14 @@ QUERY_ANALYST = PromptTemplate(
              "1. Extract 3-5 English keywords/technical terms for knowledge base search\n"
              "2. Classify as: definition | calculation | comparison | explanation | exam_tip\n"
              "3. Identify the command verb (state, explain, describe, compare, calculate, evaluate, etc.)\n"
-             'Return JSON: {"keywords": ["term1"], "qtype": "definition", "verb": "explain"}'),
+             "4. Identify the main subject topic (e.g. 'Data Compression', 'Interrupt Handling')\n"
+             'Return JSON: {"keywords": ["term1"], "qtype": "definition", "verb": "explain", "topic": "Topic Name"}'),
     zh_user=("问题: %(question)s\n\n"
              "1. 提取3-5个英文关键词/技术术语用于知识库检索（将中文概念翻译为英文术语）\n"
              "2. 分类: definition(定义) | calculation(计算) | comparison(对比) | explanation(解释) | exam_tip(考试技巧)\n"
              "3. 识别指令动词(state/explain/describe/compare/calculate/evaluate...)\n"
-             '返回 JSON: {"keywords": ["term1"], "qtype": "definition", "verb": "explain"}'),
+             "4. 识别主题名称（如 'Data Compression', 'Interrupt Handling'）\n"
+             '返回 JSON: {"keywords": ["term1"], "qtype": "definition", "verb": "explain", "topic": "主题名称"}'),
 )
 
 CRITIC = PromptTemplate(

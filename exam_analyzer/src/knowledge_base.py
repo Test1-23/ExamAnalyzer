@@ -472,15 +472,7 @@ class QADatabase:
     # ---- Topic vectors helper (for dependency candidate generation) ----
 
     def get_topic_answer_texts(self) -> dict[str, str]:
-        """Return {topic: concatenated_answer_texts} for dependency embedding.
-        Uses answer_text (ground truth), not knowledge_summary (Flash-generated)."""
-        rows = self.conn.execute(
-            "SELECT topic, answer_text FROM qa_pairs WHERE topic != '' AND topic != '(uncategorized)'"
-        ).fetchall()
-        texts: dict[str, list[str]] = {}
-        for r in rows:
-            texts.setdefault(r["topic"], []).append(r["answer_text"])
-        return {t: " ".join(parts)[:2000] for t, parts in texts.items()}
+        return self.qa.get_topic_answer_texts()
 
     # ---- Knowledge Points (KP graph) ----
 
