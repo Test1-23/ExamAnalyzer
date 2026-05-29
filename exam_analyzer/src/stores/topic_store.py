@@ -110,5 +110,3 @@ class TopicStore:
         if topic:
             return self._qb.get_where("topic_difficulty", topic=topic)
         return self._qb.get_all("topic_difficulty", order_by="mode_difficulty, topic")
-
-    # -- Topic Dependencies --
