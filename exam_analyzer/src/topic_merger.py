@@ -12,6 +12,32 @@ def _escape_pct(text: str) -> str:
     return text.replace("%", "%%")
 
 
+def _resolve_transitive(mergers: dict) -> dict:
+    """Resolve transitive merge chains into flat one-step mappings.
+
+    {"B": "A", "C": "B"} → {"B": "A", "C": "A"} (C->B->A flattened to C->A).
+    Returns {old_topic: ultimate_canonical} with cycles detected and logged.
+    """
+    from .logger import get_logger
+    _log = get_logger()
+
+    flat = {}
+    for old_topic in mergers:
+        visited = {old_topic}
+        canonical = mergers[old_topic]
+        while canonical in mergers:
+            if canonical in visited:
+                _log.warning(
+                    "Topic merge cycle for '%s' — breaking at '%s'",
+                    old_topic, canonical)
+                break
+            visited.add(canonical)
+            canonical = mergers[canonical]
+        if canonical != old_topic:
+            flat[old_topic] = canonical
+    return flat
+
+
 def merge_similar_topics(db: QADatabase, client, debug) -> None:
     """Merge topics with similar answer content. Batch-encodes all topics once."""
     groups = db.get_topic_groups()
@@ -63,17 +89,20 @@ def merge_similar_topics(db: QADatabase, client, debug) -> None:
             done.add(t)
 
     if mergers:
+        # Resolve transitive chains (A→B→C) into flat one-step mappings (A→C, B→C)
+        flat_mergers = _resolve_transitive(mergers)
+
         merged_count = 0
-        for old_topic, new_topic in mergers.items():
-            merged_count += db.rename_topic(new_topic, old_topic)
+        for old_topic, canonical in flat_mergers.items():
+            merged_count += db.rename_topic(canonical, old_topic)
 
         all_links = db.conn.execute(
             "SELECT src_topic, dst_topic, count FROM topic_links"
         ).fetchall()
         merged = {}
         for r in all_links:
-            src = mergers.get(r["src_topic"], r["src_topic"])
-            dst = mergers.get(r["dst_topic"], r["dst_topic"])
+            src = flat_mergers.get(r["src_topic"], r["src_topic"])
+            dst = flat_mergers.get(r["dst_topic"], r["dst_topic"])
             if src == dst:
                 continue
             key = (src, dst)
@@ -85,7 +114,7 @@ def merge_similar_topics(db: QADatabase, client, debug) -> None:
                     "INSERT INTO topic_links (src_topic, dst_topic, count) VALUES (?, ?, ?)",
                     (src, dst, total),
                 )
-        debug(f"  Topic merge: {len(mergers)} groups, {merged_count} QAs affected, "
+        debug(f"  Topic merge: {len(flat_mergers)} groups, {merged_count} QAs affected, "
               f"{len(all_links)} links -> {len(merged)} after merge")
 
 

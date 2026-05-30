@@ -1016,9 +1016,15 @@ def _adjust_vectors_from_feedback(db: QADatabase, debug_cb=None) -> dict:
             )
 
     # Layer 2: KP vectors (cascade from member QA embeddings)
+    # Two-phase: collect all unique QA texts → batch-encode once → distribute to KPs
     kp_rows = db.conn.execute(
         "SELECT id FROM knowledge_points WHERE quality != 'disputed'"
     ).fetchall()
+
+    # Phase 1: Collect unique QA texts with kp_id → qa_id list mappings
+    kp_qa_map = {}          # kp_id → list of qa_ids
+    qa_id_to_idx = {}       # qa_id → index in all_texts (dedup)
+    all_texts = []
     for kp_row in kp_rows:
         kp_id = kp_row["id"]
         member_rows = db.conn.execute(
@@ -1027,17 +1033,29 @@ def _adjust_vectors_from_feedback(db: QADatabase, debug_cb=None) -> dict:
         if not member_rows:
             continue
         qa_ids = [r["qa_id"] for r in member_rows[:5]]
-        model = _get_model(TOPIC_EMBED_MODEL)
-        qa_texts = []
+        kp_qa_map[kp_id] = qa_ids
         for qid in qa_ids:
-            qa = db.get(qid)
-            if qa:
-                qa_texts.append((qa.get("question_text", "") + " " + qa.get("answer_text", ""))[:500])
-        if qa_texts:
-            vecs = model.encode(qa_texts, normalize_embeddings=True, convert_to_numpy=True)
-            centroid = _compute_graph_centroid(list(vecs), [1.0] * len(vecs))
-            db.upsert_kp_vector(kp_id, centroid)
-            result["kps_adjusted"] += 1
+            if qid not in qa_id_to_idx:
+                qa = db.get(qid)
+                if qa:
+                    text = (qa.get("question_text", "") + " " + qa.get("answer_text", ""))[:500]
+                    qa_id_to_idx[qid] = len(all_texts)
+                    all_texts.append(text)
+
+    # Phase 2: Batch-encode all unique QA texts at once
+    if all_texts:
+        model = _get_model(TOPIC_EMBED_MODEL)
+        all_vecs = model.encode(all_texts, batch_size=64,
+                                normalize_embeddings=True, convert_to_numpy=True)
+
+        # Phase 3: Distribute — each KP looks up its member vectors by index
+        for kp_id, qa_ids in kp_qa_map.items():
+            indices = [qa_id_to_idx[qid] for qid in qa_ids if qid in qa_id_to_idx]
+            if indices:
+                kp_vecs = all_vecs[indices]
+                centroid = _compute_graph_centroid(list(kp_vecs), [1.0] * len(indices))
+                db.upsert_kp_vector(kp_id, centroid)
+                result["kps_adjusted"] += 1
 
     # Layer 3: Topic vectors (cascade from KP vectors)
     for t in topics:

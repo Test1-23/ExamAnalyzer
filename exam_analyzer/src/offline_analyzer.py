@@ -580,11 +580,44 @@ def _get_signal(qa, signal_name, db, all_qas):
     return None
 
 
+def _evaluate_signal(sig_val, bi_threshold, ia_threshold, margin):
+    """Map a single signal value against calibrated boundaries.
+
+    Returns (vote_label, is_boundary).  Pure function — independently testable.
+    bi_threshold/ia_threshold can be None if that boundary is not calibrated.
+    """
+    # bi_threshold exists → classify basic vs intermediate/advanced
+    if bi_threshold is not None:
+        if sig_val < bi_threshold * (1 - margin):
+            return "basic", False
+        if sig_val < bi_threshold * (1 + margin):
+            return "basic", True
+        # Above bi_threshold — classify intermediate vs advanced
+        if ia_threshold is not None:
+            if sig_val < ia_threshold * (1 - margin):
+                return "intermediate", False
+            if sig_val < ia_threshold * (1 + margin):
+                return "intermediate", True
+            return "advanced", False
+        return "intermediate", False
+
+    # bi_threshold missing but ia_threshold exists → classify intermediate vs advanced
+    if ia_threshold is not None:
+        if sig_val < ia_threshold * (1 - margin):
+            return "intermediate", False
+        if sig_val < ia_threshold * (1 + margin):
+            return "intermediate", True
+        return "advanced", False
+
+    # Neither boundary defined
+    return "intermediate", False
+
+
 def _classify_difficulty(signals, boundaries, margin=0.10):
     """Classify a QA's difficulty from signal values and calibrated boundaries.
 
-    Returns (label, is_boundary).  Extracted from _phase3_classify_and_confirm
-    to eliminate 5-level nesting.
+    Returns (label, is_boundary).  Delegates per-signal evaluation to
+    _evaluate_signal (pure function, independently testable).
     """
     votes = {"basic": 0, "intermediate": 0, "advanced": 0}
     is_boundary = False
@@ -592,38 +625,15 @@ def _classify_difficulty(signals, boundaries, margin=0.10):
     for sig_name, sig_val in signals.items():
         if sig_val is None:
             continue
-        bi_key = f"{sig_name}_basic_inter"
-        ia_key = f"{sig_name}_inter_adv"
-        if bi_key in boundaries:
-            mid = boundaries[bi_key]
-            if sig_val < mid * (1 - margin):
-                votes["basic"] += 1
-            elif sig_val < mid * (1 + margin):
-                votes["basic"] += 1
-                is_boundary = True
-            else:
-                if ia_key in boundaries:
-                    mid2 = boundaries[ia_key]
-                    if sig_val < mid2 * (1 - margin):
-                        votes["intermediate"] += 1
-                    elif sig_val < mid2 * (1 + margin):
-                        votes["intermediate"] += 1
-                        is_boundary = True
-                    else:
-                        votes["advanced"] += 1
-                else:
-                    votes["intermediate"] += 1
-        elif ia_key in boundaries:
-            mid2 = boundaries[ia_key]
-            if sig_val < mid2 * (1 - margin):
-                votes["intermediate"] += 1
-            elif sig_val < mid2 * (1 + margin):
-                votes["intermediate"] += 1
-                is_boundary = True
-            else:
-                votes["advanced"] += 1
-        else:
-            votes["intermediate"] += 1
+        vote, boundary = _evaluate_signal(
+            sig_val,
+            boundaries.get(f"{sig_name}_basic_inter"),
+            boundaries.get(f"{sig_name}_inter_adv"),
+            margin,
+        )
+        votes[vote] += 1
+        if boundary:
+            is_boundary = True
 
     if votes["advanced"] > 0:
         return "advanced", is_boundary
