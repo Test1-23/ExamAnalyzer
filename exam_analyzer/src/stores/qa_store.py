@@ -121,6 +121,7 @@ class QaStore:
                question_number: str = "", parent_question: str = "",
                knowledge_summary: str = "") -> int:
         with self._mgr._write_lock:
+            self._mgr._assert_write_locked()
             existing = self._qb.conn.execute(
                 "SELECT id FROM qa_pairs WHERE question_text = ? AND answer_text = ? LIMIT 1",
                 (question_text, answer_text),
@@ -141,6 +142,7 @@ class QaStore:
 
     def record_attempt(self, qa_id: int, success: bool, reason: str = ""):
         with self._mgr._write_lock:
+            self._mgr._assert_write_locked()
             if success:
                 self._qb.conn.execute(
                     "UPDATE qa_pairs SET success_count=success_count+1, "
@@ -157,10 +159,12 @@ class QaStore:
 
     def update_topic(self, qa_id: int, topic: str):
         with self._mgr._write_lock:
+            self._mgr._assert_write_locked()
             self._qb.update("qa_pairs", qa_id, topic=topic)
 
     def rename_topic(self, new_topic: str, old_topic: str) -> int:
         with self._mgr._write_lock:
+            self._mgr._assert_write_locked()
             rows = self._qb.conn.execute(
                 "UPDATE qa_pairs SET topic=? WHERE topic=?", (new_topic, old_topic))
             self._mgr.maybe_commit()

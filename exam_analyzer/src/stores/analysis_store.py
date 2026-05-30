@@ -16,6 +16,7 @@ class AnalysisStore:
                      question_number: str = "", latency_ms: int = 0,
                      success: bool = True, output_size: int = 0):
         with self._mgr._write_lock:
+            self._mgr._assert_write_locked()
             self._qb.insert("api_call_log",
                            stage=stage, model=model, paper=paper,
                            question_number=question_number, latency_ms=latency_ms,
@@ -29,6 +30,7 @@ class AnalysisStore:
                               missed_count: int = 0, missed_text: str = "",
                               miss_categories: str = ""):
         with self._mgr._write_lock:
+            self._mgr._assert_write_locked()
             total = covered_count + missed_count
             ratio = (covered_count / total) if total > 0 else 0.0
             match = 1 if (step0_topic and round2_topic
@@ -69,6 +71,7 @@ class AnalysisStore:
     def upsert_distillation_cache(self, topic: str, qa_count: int,
                                    qa_ids_hash: str, content: str):
         with self._mgr._write_lock:
+            self._mgr._assert_write_locked()
             self._qb.conn.execute(
                 """INSERT OR REPLACE INTO distillation_cache
                    (topic, qa_count, qa_ids_hash, distilled_content, distilled_at)
@@ -79,6 +82,7 @@ class AnalysisStore:
 
     def invalidate_distillation_cache(self, topic: str):
         with self._mgr._write_lock:
+            self._mgr._assert_write_locked()
             self._qb.delete("distillation_cache", topic, id_col="topic")
 
     # -- Evolution History --
@@ -87,6 +91,7 @@ class AnalysisStore:
                          trigger_detail: str = "", old_state: str = "",
                          new_state: str = "", outcome: str = "pending"):
         with self._mgr._write_lock:
+            self._mgr._assert_write_locked()
             self._qb.insert("evolution_history",
                            kp_id=kp_id, trigger_type=trigger_type,
                            trigger_detail=trigger_detail, old_state=old_state,
@@ -108,6 +113,7 @@ class AnalysisStore:
 
     def checkpoint(self, task_name: str, qa_count: int, status: str = "completed"):
         with self._mgr._write_lock:
+            self._mgr._assert_write_locked()
             self._qb.conn.execute(
                 """INSERT OR REPLACE INTO analysis_checkpoints
                    (task_name, qa_count_at_run, completed_at, status)
@@ -122,6 +128,7 @@ class AnalysisStore:
 
     def clear_checkpoint(self, task_name: str):
         with self._mgr._write_lock:
+            self._mgr._assert_write_locked()
             self._qb.delete("analysis_checkpoints", task_name, id_col="task_name")
 
     # -- Exam Sessions --
@@ -142,6 +149,7 @@ class AnalysisStore:
                           occurrence_count: int = 0, avg_difficulty: str = "",
                           trend_summary: str = ""):
         with self._mgr._write_lock:
+            self._mgr._assert_write_locked()
             self._qb.conn.execute(
                 """INSERT OR REPLACE INTO exam_trends
                    (kp_id, year, season, occurrence_count, avg_difficulty, trend_summary)
@@ -173,6 +181,7 @@ class AnalysisStore:
                             topic_specific_patterns: str = "",
                             verb_family: str = ""):
         with self._mgr._write_lock:
+            self._mgr._assert_write_locked()
             self._qb.conn.execute(
                 """INSERT OR REPLACE INTO command_verb_patterns
                    (verb, sample_count, avg_answer_length, median_answer_length,
@@ -198,6 +207,7 @@ class AnalysisStore:
                           topic_link_count: int = 0, embedding_cos: float = None,
                           confidence: str = "low", validated_by: str = "flash"):
         with self._mgr._write_lock:
+            self._mgr._assert_write_locked()
             existing = self._qb.conn.execute(
                 "SELECT first_seen_at FROM topic_dependencies "
                 "WHERE prerequisite = ? AND dependent = ?",

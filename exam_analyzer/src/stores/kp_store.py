@@ -14,6 +14,7 @@ class KpStore:
 
     def upsert(self, spec: KPSpec):
         with self._mgr._write_lock:
+            self._mgr._assert_write_locked()
             existing = self._qb.conn.execute(
                 "SELECT id FROM knowledge_points WHERE id = ?", (spec.kp_id,)
             ).fetchone()
@@ -90,6 +91,7 @@ class KpStore:
 
     def upsert_edge(self, spec: KpEdgeSpec):
         with self._mgr._write_lock:
+            self._mgr._assert_write_locked()
             self._qb.conn.execute(
                 """INSERT OR REPLACE INTO kp_edges
                    (source_kp, target_kp, edge_type, retrieval_weight,
@@ -137,6 +139,7 @@ class KpStore:
                        membership_strength: float = 1.0,
                        is_representative: bool = False):
         with self._mgr._write_lock:
+            self._mgr._assert_write_locked()
             self._qb.conn.execute(
                 """INSERT OR REPLACE INTO qa_kp_membership
                    (qa_id, kp_id, membership_strength, is_representative)

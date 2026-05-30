@@ -12,6 +12,7 @@ class FragmentStore:
 
     def insert_batch(self, fragments: list[dict]) -> int:
         with self._mgr._write_lock:
+            self._mgr._assert_write_locked()
             count = 0
             for f in fragments:
                 self._qb.conn.execute(
@@ -28,6 +29,7 @@ class FragmentStore:
     def record_help_with_level(self, fragment_id: str, helped_qa_id: int,
                                help_effect: float = 0.0, help_level: str = ""):
         with self._mgr._write_lock:
+            self._mgr._assert_write_locked()
             self._qb.conn.execute(
                 """INSERT OR REPLACE INTO fragment_help_map
                    (fragment_id, helped_qa_id, help_effect, help_level)
@@ -89,6 +91,7 @@ class FragmentStore:
                           avg_help_score: float = 0.0, topic_coherence: float = 0.0,
                           variance: float = 0.0):
         with self._mgr._write_lock:
+            self._mgr._assert_write_locked()
             self._qb.conn.execute(
                 """INSERT OR REPLACE INTO fragment_centrality
                    (fragment_id, verification_count, avg_help_score, topic_coherence,

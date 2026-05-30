@@ -14,6 +14,7 @@ class VectorStore:
 
     def upsert_kp_vector(self, kp_id: str, vector: np.ndarray):
         with self._mgr._write_lock:
+            self._mgr._assert_write_locked()
             self._qb.conn.execute(
                 """INSERT OR REPLACE INTO kp_vectors
                    (kp_id, vector, adjustment_count, updated_at)
@@ -33,6 +34,7 @@ class VectorStore:
 
     def upsert_qa_kp_score(self, qa_id: int, kp_id: str, relevance_score: float):
         with self._mgr._write_lock:
+            self._mgr._assert_write_locked()
             self._qb.conn.execute(
                 """INSERT OR REPLACE INTO qa_kp_scores (qa_id, kp_id, relevance_score)
                    VALUES (?, ?, ?)""",
@@ -50,6 +52,7 @@ class VectorStore:
 
     def upsert_topic_vector(self, topic_id: str, vector: np.ndarray, member_count: int = 0):
         with self._mgr._write_lock:
+            self._mgr._assert_write_locked()
             self._qb.conn.execute(
                 """INSERT OR REPLACE INTO topic_vectors
                    (topic_id, vector, member_kp_count, updated_at)

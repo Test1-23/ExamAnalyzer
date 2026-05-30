@@ -12,6 +12,7 @@ class TopicStore:
 
     def upsert(self, topic_id: str, name: str = "", quality: str = "embryonic"):
         with self._mgr._write_lock:
+            self._mgr._assert_write_locked()
             self._qb.conn.execute(
                 """INSERT OR REPLACE INTO dynamic_topics
                    (topic_id, name, quality, last_evolved_at)
@@ -22,6 +23,7 @@ class TopicStore:
 
     def update_stats(self, topic_id: str, mass: int, cohesion: float, stability: float):
         with self._mgr._write_lock:
+            self._mgr._assert_write_locked()
             self._qb.conn.execute(
                 """UPDATE dynamic_topics SET mass=?, cohesion=?, stability=?,
                    last_evolved_at=datetime('now') WHERE topic_id=?""",
@@ -31,6 +33,7 @@ class TopicStore:
 
     def set_kp(self, topic_id: str, kp_concept: str, kp_detail: str):
         with self._mgr._write_lock:
+            self._mgr._assert_write_locked()
             self._qb.conn.execute(
                 """UPDATE dynamic_topics SET kp_concept=?, kp_detail=?,
                    quality='stable', last_evolved_at=datetime('now')
@@ -54,6 +57,7 @@ class TopicStore:
 
     def set_fragment_membership(self, fragment_id: str, topic_id: str, loyalty: float = 0.5):
         with self._mgr._write_lock:
+            self._mgr._assert_write_locked()
             self._qb.conn.execute(
                 """INSERT OR REPLACE INTO fragment_membership
                    (fragment_id, topic_id, loyalty, joined_at, previous_topic_id)
@@ -97,6 +101,7 @@ class TopicStore:
         if not src_topic or not dst_topic or src_topic == dst_topic:
             return
         with self._mgr._write_lock:
+            self._mgr._assert_write_locked()
             self._qb.conn.execute(
                 """INSERT INTO topic_links (src_topic, dst_topic, count)
                    VALUES (?, ?, ?)
@@ -118,6 +123,7 @@ class TopicStore:
                           difficulty_spread: bool = False,
                           assessment_method: str = "hybrid"):
         with self._mgr._write_lock:
+            self._mgr._assert_write_locked()
             self._qb.conn.execute(
                 """INSERT OR REPLACE INTO topic_difficulty
                    (topic, qa_count, basic_count, intermediate_count, advanced_count,

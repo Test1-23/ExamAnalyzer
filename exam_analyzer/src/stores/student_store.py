@@ -12,6 +12,7 @@ class StudentStore:
 
     def save_memory(self, student_id: str, memory_type: str, topic: str, content: str):
         with self._mgr._write_lock:
+            self._mgr._assert_write_locked()
             self._qb.insert("student_memory",
                            student_id=student_id, memory_type=memory_type,
                            topic=topic, content=content)
@@ -26,6 +27,7 @@ class StudentStore:
 
     def record_confusion(self, student_id: str, topic: str, trigger: str, ctype: str):
         with self._mgr._write_lock:
+            self._mgr._assert_write_locked()
             self._qb.insert("confusion_events",
                            student_id=student_id, topic=topic,
                            trigger_question=trigger, confusion_type=ctype)
@@ -34,6 +36,7 @@ class StudentStore:
 
     def upsert_knowledge_state(self, student_id: str, topic: str, state: str):
         with self._mgr._write_lock:
+            self._mgr._assert_write_locked()
             self._qb.conn.execute(
                 """INSERT INTO student_knowledge_state (student_id, topic, state, evidence_count)
                    VALUES (?, ?, ?, 1)
@@ -54,6 +57,7 @@ class StudentStore:
     def record_trajectory(self, student_id: str, kp_id: str,
                           from_state: str, to_state: str, trigger: str = ""):
         with self._mgr._write_lock:
+            self._mgr._assert_write_locked()
             self._qb.insert("student_trajectory",
                            student_id=student_id, kp_id=kp_id,
                            from_state=from_state, to_state=to_state,

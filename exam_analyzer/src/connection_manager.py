@@ -94,6 +94,27 @@ class ConnectionMgr:
         if self._tx_depth == 0:
             self.conn.commit()
 
+    def _assert_write_locked(self):
+        """Debug-only: raise AssertionError if write lock is not held by current thread.
+
+        Store write methods call this as their first line inside
+        ``with self._mgr._write_lock:`` so that a missing lock is caught
+        immediately instead of causing silent data corruption.
+
+        Uses ``RLock._is_owned()`` (CPython) which correctly tests whether
+        the *current* thread holds the reentrant lock — ``acquire(False)``
+        always succeeds from the same thread on an RLock, so it cannot be
+        used for this check.
+
+        The entire body is guarded by ``if __debug__:`` so ``python -O``
+        eliminates it — zero overhead in production.
+        """
+        if __debug__:
+            if not self._write_lock._is_owned():
+                raise AssertionError(
+                    "Store write operation called without holding _write_lock"
+                )
+
     def transaction(self):
         """Context manager for atomic multi-step writes.
 

@@ -10,6 +10,7 @@ class ChatStore:
 
     def save_message(self, session_id: str, role: str, content: str, sources: str = ""):
         with self._mgr._write_lock:
+            self._mgr._assert_write_locked()
             self._qb.insert("chat_history",
                            session_id=session_id, role=role,
                            content=content, sources=sources)
@@ -21,4 +22,5 @@ class ChatStore:
 
     def clear_history(self, session_id: str):
         with self._mgr._write_lock:
+            self._mgr._assert_write_locked()
             self._qb.delete_where("chat_history", session_id=session_id)
