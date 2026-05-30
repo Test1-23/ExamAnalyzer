@@ -19,7 +19,7 @@ class VectorStore:
                    (kp_id, vector, adjustment_count, updated_at)
                    VALUES (?, ?, COALESCE((SELECT adjustment_count FROM kp_vectors
                     WHERE kp_id=?), 0) + 1, datetime('now'))""",
-                (kp_id, vector.tobytes(), kp_id),
+                (kp_id, vector.astype(np.float32).tobytes(), kp_id),
             )
             self._mgr.maybe_commit()
 
@@ -54,7 +54,7 @@ class VectorStore:
                 """INSERT OR REPLACE INTO topic_vectors
                    (topic_id, vector, member_kp_count, updated_at)
                    VALUES (?, ?, ?, datetime('now'))""",
-                (topic_id, vector.tobytes(), member_count),
+                (topic_id, vector.astype(np.float32).tobytes(), member_count),
             )
             self._mgr.maybe_commit()
 
