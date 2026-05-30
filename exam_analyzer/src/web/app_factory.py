@@ -43,15 +43,19 @@ def create_app() -> Flask:
         _log.debug(f"HTTP {request.method} {request.path} → {response.status_code} ({elapsed}ms)")
         return response
 
-    # ---- Register Blueprints (routes currently in app.py) ----
-    from .routes_analysis import analysis_bp
-    from .routes_chat import chat_bp
-    from .routes_eval import eval_bp
-    from .routes_knowledge import knowledge_bp
-
-    app.register_blueprint(analysis_bp)
-    app.register_blueprint(chat_bp)
-    app.register_blueprint(eval_bp)
-    app.register_blueprint(knowledge_bp)
+    # ---- Register Blueprints ----
+    # Blueprint files exist as architectural placeholders for P4 route migration.
+    # Currently all 21 routes live in app.py via @app.route().
+    # Registering empty Blueprints adds unused URL namespaces — deferred until
+    # routes are actually migrated to avoid endpoint name conflicts.
+    # When migration proceeds, uncomment these lines:
+    # from .routes_analysis import analysis_bp
+    # from .routes_chat import chat_bp
+    # from .routes_eval import eval_bp
+    # from .routes_knowledge import knowledge_bp
+    # app.register_blueprint(analysis_bp)
+    # app.register_blueprint(chat_bp)
+    # app.register_blueprint(eval_bp)
+    # app.register_blueprint(knowledge_bp)
 
     return app
