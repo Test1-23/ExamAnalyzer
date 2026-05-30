@@ -1,15 +1,13 @@
-"""Web layer package — Flask Blueprint-based restructuring.
+"""Web layer package — Flask Blueprint-based restructuring (P4 complete).
 
-Planned sub-modules (code currently in app.py — being migrated):
-- state: analysis_state, _state_lock, _chat_retriever, shutdown_event
-- routes_analysis: 7 analysis endpoints as Blueprint
-- routes_chat: 7 chat endpoints as Blueprint
-- routes_eval: 2 eval endpoints as Blueprint
-- routes_knowledge: 5 knowledge+practice endpoints as Blueprint
-- app_factory: create_app()
-
-Currently this package is a placeholder for the P4 refactoring.
+Public API:
+    from src.web import create_app, state
+    from src.web.routes_analysis import analysis_bp
+    from src.web.routes_chat import chat_bp
+    from src.web.routes_eval import eval_bp
+    from src.web.routes_knowledge import knowledge_bp
 """
 
-# Stub — actual re-exports will be added during P4 implementation
-__all__ = []
+from .app_factory import create_app
+
+__all__ = ["create_app"]
