@@ -23,6 +23,7 @@ from .pdf_extractor import extract_pdf
 from .diagnostics import run_closed_loop, run_cross_paper_check
 from .embedding_cluster import detect_content_lang
 from .prompt_factory import FRAGMENT, QA_CLASSIFY, PromptType, PromptBuilder
+from .prompts.pipeline_prompts import stage2_qa_pairing, _generate_summary, _build_answer_prompt, _build_grade_prompt
 from .topic_merger import merge_similar_topics
 from .reviewer import review_distilled
 from .evolution import run_evolution_cycle
@@ -37,42 +38,9 @@ from .constants import (
 )
 
 # ============================================================
-# Stage 2: QA pairing (Flash)
-# ============================================================
-
-def stage2_qa_pairing(pair, client, debug: Callable) -> list:
-    """Call Flash once per paper to match questions with answers via PromptBuilder."""
-    qp_text = pair.qp.full_text
-    ms_text = pair.ms.full_text
-    debug(f"  QA pairing: {pair.display_name} ({len(qp_text)}c / {len(ms_text)}c)")
-
-    messages = PromptBuilder.build(
-        PromptType.QA_PAIRING,
-        display_name=pair.display_name,
-        qp_text=qp_text, ms_text=ms_text,
-        lang=detect_content_lang((qp_text + ms_text)[:2000]))
-
-    result = call_flash(client, messages, debug_callback=debug)
-    raw_pairs = result.get("qa_pairs", [])
-    debug(f"  QA pairing: {len(raw_pairs)} questions found")
-    qa_list = []
-    for i, rp in enumerate(raw_pairs):
-        qn = rp.get("question_number", "")
-        if not qn:
-            qn = str(i + 1)
-        qa_list.append(QAPair(
-            question_number=str(qn),
-            question_text=rp.get("question_text", ""),
-            answer_text=rp.get("answer_text", ""),
-            parent_question=rp.get("parent_question", str(qn)),
-        ))
-    return qa_list
 
 
 # ============================================================
-# Bilingual prompt sets for each API call
-# ============================================================
-
 # -- Data helpers --
 
 def _parse_missed_points(missed_raw: list) -> tuple[list[str], str]:
@@ -117,29 +85,6 @@ def _record_fragment_help(used_ids: set, covered: list, missed_texts: list,
                     fid, qa_id, round(help_effect, 3), help_level)
 
 
-# -- Summary + Topic (Flash) --
-
-def _generate_summary(question_text: str, answer_text: str,
-                      client, debug: Callable,
-                      existing_topics: list = None) -> tuple[str, str]:
-    """Generate Flash summary + topic, reusing existing topics when applicable."""
-    lang = detect_content_lang(question_text + answer_text)
-    topic_list = ""
-    if existing_topics:
-        top_topics = sorted(existing_topics, key=lambda x: -x[1])[:15]
-        topic_list = ", ".join(t[0] for t in top_topics)
-
-    messages = PromptBuilder.build(
-        PromptType.SUMMARY, question_text=question_text,
-        answer_text=answer_text, topic_list=topic_list, lang=lang)
-    try:
-        result = call_flash(client, messages, max_retries=1, debug_callback=debug)
-        if isinstance(result, dict):
-            return result.get("summary", question_text[:200]), result.get("topic", "(unnamed)")
-        return str(result), "(unnamed)"
-    except Exception as e:
-        debug(f"  summary generation failed: {e}")
-        return question_text[:200], "(unnamed)[auto]"
 
 def _extract_ms_fragments(answer_text: str, qa_id: int, client, debug: Callable) -> list[dict]:
     """Split a mark scheme answer into individual scoring points. Preserves original wording."""
@@ -229,29 +174,6 @@ def _place_qa_vector_from_kp_scores(db: QADatabase, qa_id: int,
     debug(f"  QA {qa_id}: Topic='{topic}', centrality={centrality}, best_kp={best_kp}({best_score})")
 
 
-# -- Round 1: Answer with past QAs (Pro) --
-
-def _build_answer_prompt(question_text: str, similar_qas: list[dict]) -> list:
-    """Build Answer prompt via PromptBuilder (template: _ANSWER_TMPL)."""
-    if similar_qas:
-        qa_block = ""
-        for i, qa in enumerate(similar_qas, 1):
-            qa_block += (f"--- Past Q{i} (similarity: {qa.get('_score',0):.2f}) ---\n"
-                         f"Q: {qa['question_text']}\nA: {qa['answer_text']}\n\n")
-    else:
-        qa_block = "(Knowledge base is empty, no past Q&As)\n\n"
-
-    return PromptBuilder.build(
-        PromptType.ANSWER, qa_block=qa_block, question_text=question_text,
-        lang=detect_content_lang(question_text))
-
-def _build_grade_prompt(question_text: str, predicted_answer: str,
-                        ms_answer: str) -> list:
-    """Build Grade prompt via PromptBuilder (template: _GRADE_TMPL)."""
-    return PromptBuilder.build(
-        PromptType.GRADE, question_text=question_text,
-        predicted_answer=predicted_answer, ms_answer=ms_answer,
-        lang=detect_content_lang(question_text + ms_answer))
 
 _FILENAME_RE = re.compile(r'^(\d+)_([smw])(\d{2})_(\d+)')
 
