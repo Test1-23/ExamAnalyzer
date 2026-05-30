@@ -33,7 +33,7 @@ def chat_history_endpoint():
     if request.method == "DELETE":
         retriever.clear_chat_history(session_id)
         return jsonify({"success": True})
-    history = retriever._db.get_chat_history(session_id)
+    history = retriever.db.get_chat_history(session_id)
     return jsonify({"history": history})
 
 
@@ -64,7 +64,7 @@ def chat():
 
     history = []
     try:
-        history = retriever._db.get_chat_history(session_id)
+        history = retriever.db.get_chat_history(session_id)
     except Exception:
         _log.debug("Failed to load chat history", exc_info=True)
 
@@ -109,7 +109,7 @@ def chat():
             ctx_kp = "Relevant knowledge points from the curriculum:\n" + "\n".join(kp_lines) + "\n\n"
 
     relevant_topics = list(set(qa.get("topic", "") for qa in relevant[:3] if qa.get("topic")))
-    analysis_ctx = build_analysis_context(retriever._db, relevant_topics, student_verb, session_id)
+    analysis_ctx = build_analysis_context(retriever.db, relevant_topics, student_verb, session_id)
     if analysis_ctx:
         has_diff = "difficulty" in analysis_ctx.lower()
         has_verb = "answer style" in analysis_ctx.lower()
@@ -136,23 +136,23 @@ def chat():
         answer_text = answer_raw2.get("answer", "") if isinstance(answer_raw2, dict) else str(answer_raw2)
 
     suggestions = agent_suggest(question, answer_text, relevant, lang, client,
-                                db=retriever._db, session_id=session_id)
+                                db=retriever.db, session_id=session_id)
 
     try:
-        retriever._db.save_chat_message(session_id, "user", question, "")
-        retriever._db.save_chat_message(session_id, "assistant", answer_text,
+        retriever.db.save_chat_message(session_id, "user", question, "")
+        retriever.db.save_chat_message(session_id, "assistant", answer_text,
                                         json.dumps([{"topic": qa.get("topic", ""), "question": qa.get("question_text", "")[:120]} for qa in relevant[:3]]))
         for qa in relevant[:2]:
             topic = qa.get("topic", "")
             if topic:
-                retriever._db.save_student_memory(session_id, "question", topic, question[:500])
-                retriever._db.upsert_knowledge_state(session_id, topic, "learning")
+                retriever.db.save_student_memory(session_id, "question", topic, question[:500])
+                retriever.db.upsert_knowledge_state(session_id, topic, "learning")
                 try:
-                    rows = retriever._db.conn.execute(
+                    rows = retriever.db.conn.execute(
                         "SELECT kp_id FROM qa_kp_membership WHERE qa_id = ?", (qa["id"],)
                     ).fetchall()
                     for r in rows:
-                        retriever._db.record_trajectory(session_id, r["kp_id"], "new", "learning", "chat_question")
+                        retriever.db.record_trajectory(session_id, r["kp_id"], "new", "learning", "chat_question")
                 except Exception:
                     _log.debug("Failed to record trajectory", exc_info=True)
     except Exception:
@@ -182,7 +182,7 @@ def exam_stats():
     retriever = state.get_chat_retriever()
     if retriever is None:
         return jsonify({"error": "知识库未就绪"}), 400
-    stats = retriever._db.get_exam_stats(topic)
+    stats = retriever.db.get_exam_stats(topic)
     return jsonify({"topic": topic, "stats": stats})
 
 
@@ -192,7 +192,7 @@ def student_state():
     retriever = state.get_chat_retriever()
     if retriever is None:
         return jsonify({"state": {}})
-    return jsonify({"state": retriever._db.get_knowledge_state(sid)})
+    return jsonify({"state": retriever.db.get_knowledge_state(sid)})
 
 
 @chat_bp.route("/api/chat/student-confusions")
@@ -201,7 +201,7 @@ def student_confusions():
     retriever = state.get_chat_retriever()
     if retriever is None:
         return jsonify({"confusions": []})
-    confusions = retriever._db.get_student_confusions(sid)
+    confusions = retriever.db.get_student_confusions(sid)
     topic = request.args.get("topic", "")
     if topic:
         confusions = [c for c in confusions if c["topic"] == topic]
@@ -218,7 +218,7 @@ def topic_questions():
     if retriever is None:
         return jsonify({"error": "知识库未就绪"}), 400
     qs = []
-    rows = retriever._db.qa.get_by_topic(topic, difficulty=level, order_by="is_representative DESC, success_count DESC")
+    rows = retriever.db.qa.get_by_topic(topic, difficulty=level, order_by="is_representative DESC, success_count DESC")
     for r in rows:
         qs.append({
             "question_number": r["question_number"],

@@ -33,6 +33,7 @@ from .constants import (
     RETRIEVAL_THRESHOLD, RETRIEVAL_MIN_K, RETRIEVAL_MAX_CAP,
     CENTRALITY_HIGH, CENTRALITY_MID, CENTRALITY_LOW,
     HELP_DIRECT_THRESHOLD, HELP_UNDERSTANDING_THRESHOLD,
+    SEASON_MAP, YEAR_BASE_OFFSET,
 )
 
 # ============================================================
@@ -259,10 +260,9 @@ def _ensure_session(db, display_name: str) -> Optional[int]:
     m = _FILENAME_RE.match(display_name)
     if not m:
         return None
-    season_map = {'s': 'S1', 'w': 'S2', 'm': 'S3'}
     subject = m.group(1)
-    season = season_map.get(m.group(2), "Unknown")
-    year = 2000 + int(m.group(3))
+    season = SEASON_MAP.get(m.group(2), "Unknown")
+    year = YEAR_BASE_OFFSET + int(m.group(3))
     with db.transaction():
         db.conn.execute(
             """INSERT OR IGNORE INTO exam_sessions (subject_code, season, year, display_name)

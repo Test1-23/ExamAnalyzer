@@ -23,12 +23,6 @@ class FragmentStore:
             self._mgr.maybe_commit()
         return count
 
-    def get_by_qa(self, qa_id: int) -> list[str]:
-        rows = self._qb.conn.execute(
-            "SELECT point_id FROM ms_fragments WHERE qa_id=?", (qa_id,)
-        ).fetchall()
-        return [r["point_id"] for r in rows]
-
     # -- Fragment Help Map --
 
     def record_help_with_level(self, fragment_id: str, helped_qa_id: int,

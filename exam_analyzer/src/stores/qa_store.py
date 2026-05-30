@@ -1,6 +1,7 @@
 """QaStore — domain store for qa_pairs table."""
 
 from typing import Optional
+from ..constants import SQLITE_PARAM_CHUNK
 
 
 class QaStore:
@@ -24,9 +25,8 @@ class QaStore:
         if not ids:
             return []
         row_map = {}
-        CHUNK = 900
-        for i in range(0, len(ids), CHUNK):
-            chunk = ids[i:i + CHUNK]
+        for i in range(0, len(ids), SQLITE_PARAM_CHUNK):
+            chunk = ids[i:i + SQLITE_PARAM_CHUNK]
             placeholders = ",".join("?" * len(chunk))
             rows = self._qb.conn.execute(
                 "SELECT * FROM qa_pairs WHERE id IN (%s)" % placeholders, chunk
@@ -45,9 +45,6 @@ class QaStore:
         if limit:
             sql += " LIMIT %d" % limit
         return [dict(r) for r in self._qb.conn.execute(sql, params).fetchall()]
-
-    def get_by_paper(self, paper: str) -> list[dict]:
-        return self._qb.get_where("qa_pairs", paper=paper, order_by="id")
 
     def get_topic_groups(self) -> dict[str, list[dict]]:
         from collections import defaultdict

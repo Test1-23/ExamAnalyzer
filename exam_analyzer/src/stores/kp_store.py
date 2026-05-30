@@ -144,19 +144,3 @@ class KpStore:
                 (qa_id, kp_id, membership_strength, int(is_representative)),
             )
             self._mgr.maybe_commit()
-
-    def get_membership_for_qa(self, qa_id: int) -> list[str]:
-        rows = self._qb.conn.execute(
-            "SELECT kp_id FROM qa_kp_membership WHERE qa_id=?", (qa_id,)
-        ).fetchall()
-        return [r["kp_id"] for r in rows]
-
-    def get_kp_ids_for_topic(self, topic_id: str) -> list[str]:
-        rows = self._qb.conn.execute(
-            """SELECT DISTINCT kp.id FROM knowledge_points kp
-               JOIN qa_kp_membership qkm ON kp.id = qkm.kp_id
-               JOIN qa_pairs q ON qkm.qa_id = q.id
-               WHERE q.topic = (SELECT name FROM dynamic_topics WHERE topic_id=?)""",
-            (topic_id,),
-        ).fetchall()
-        return [r["id"] for r in rows]

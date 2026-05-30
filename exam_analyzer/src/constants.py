@@ -49,6 +49,12 @@ RETRIEVAL_MIN_K = _INT("EXAM_RETRIEVAL_MIN_K", 3)
 RETRIEVAL_MAX_CAP = _INT("EXAM_RETRIEVAL_MAX_CAP", 15)
 
 # ============================================================
+# Exam filename parsing
+# ============================================================
+SEASON_MAP = {'s': 'S1', 'w': 'S2', 'm': 'S3'}
+YEAR_BASE_OFFSET = 2000
+
+# ============================================================
 # QA Vector Placement (centrality thresholds)
 # ============================================================
 CENTRALITY_HIGH = _FLT("EXAM_CENTRALITY_HIGH", 0.8)

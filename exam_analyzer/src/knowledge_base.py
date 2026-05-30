@@ -189,14 +189,10 @@ class QADatabase:
         self.topic.set_kp(topic_id, kp_concept, kp_detail)
 
     def get_stable_topics(self) -> list[dict]:
-        """Return all topics with quality='stable' and their KP text."""
-        rows = self._qb.get_where("dynamic_topics", quality="stable")
-        return [dict(r) for r in rows]
+        return self.topic.get_stable()
 
     def get_topic_fragments(self, topic_id: str) -> list[str]:
-        """Return fragment IDs belonging to a topic."""
-        rows = self._qb.get_where("fragment_membership", topic_id=topic_id)
-        return [r["fragment_id"] for r in rows]
+        return self.topic.get_fragments(topic_id)
 
     def get_fragment_help_count(self, fragment_id: str) -> int:
         """Return how many questions a fragment has helped."""
@@ -292,16 +288,7 @@ class QADatabase:
     # ---- Exam stats ----
 
     def get_exam_stats(self, topic: str) -> list[dict]:
-        rows = self.conn.execute(
-            """SELECT s.year, s.season, COUNT(*) as cnt
-               FROM qa_pairs q
-               JOIN exam_sessions s ON q.session_id = s.id
-               WHERE q.topic = ?
-               GROUP BY s.year, s.season
-               ORDER BY s.year DESC, s.season""",
-            (topic,),
-        ).fetchall()
-        return [dict(r) for r in rows]
+        return self.analysis.get_exam_stats(topic)
 
     # ---- Topic dependencies ----
 
@@ -314,35 +301,10 @@ class QADatabase:
             validated_by=spec.validated_by)
 
     def get_dependencies(self, confidence: str = None) -> list[dict]:
-        if confidence:
-            rows = self.conn.execute(
-                "SELECT * FROM topic_dependencies WHERE confidence = ? ORDER BY prerequisite",
-                (confidence,),
-            ).fetchall()
-        else:
-            rows = self.conn.execute(
-                "SELECT * FROM topic_dependencies ORDER BY prerequisite"
-            ).fetchall()
-        return [dict(r) for r in rows]
+        return self.analysis.get_dependencies(confidence)
 
     def get_dependency_graph(self) -> dict:
-        """Return {topic: {prerequisites: [...], dependents: [...]}} for all topics."""
-        rows = self.conn.execute(
-            "SELECT prerequisite, dependent, relationship_type, confidence FROM topic_dependencies"
-        ).fetchall()
-        graph: dict[str, dict] = {}
-        for r in rows:
-            pre, dep = r["prerequisite"], r["dependent"]
-            for t in (pre, dep):
-                if t not in graph:
-                    graph[t] = {"prerequisites": [], "dependents": []}
-            graph[dep]["prerequisites"].append({
-                "topic": pre, "type": r["relationship_type"], "confidence": r["confidence"]
-            })
-            graph[pre]["dependents"].append({
-                "topic": dep, "type": r["relationship_type"], "confidence": r["confidence"]
-            })
-        return graph
+        return self.analysis.get_dependency_graph()
 
     def get_direct_prerequisites(self, topic: str) -> list[dict]:
         rows = self.conn.execute(
@@ -388,10 +350,7 @@ class QADatabase:
             verb_family=spec.verb_family)
 
     def get_verb_patterns(self) -> list[dict]:
-        rows = self.conn.execute(
-            "SELECT * FROM command_verb_patterns ORDER BY sample_count DESC"
-        ).fetchall()
-        return [dict(r) for r in rows]
+        return self.analysis.get_verb_patterns()
 
     def get_verb_for_qa(self, qa_id: int) -> dict:
         return self.qa.get_verb_for_qa(qa_id)
@@ -411,15 +370,7 @@ class QADatabase:
                                      assessment_method=assessment_method)
 
     def get_topic_difficulty(self, topic: str = None) -> list[dict]:
-        if topic:
-            rows = self.conn.execute(
-                "SELECT * FROM topic_difficulty WHERE topic = ?", (topic,)
-            ).fetchall()
-        else:
-            rows = self.conn.execute(
-                "SELECT * FROM topic_difficulty ORDER BY mode_difficulty, topic"
-            ).fetchall()
-        return [dict(r) for r in rows]
+        return self.topic.get_difficulty(topic)
 
     def get_qa_difficulty(self, qa_id: int) -> str:
         return self.qa.get_qa_difficulty(qa_id)
@@ -449,36 +400,13 @@ class QADatabase:
         self.kp.upsert(spec)
 
     def get_all_kps(self) -> list[dict]:
-        rows = self.conn.execute(
-            "SELECT id, name, description, core_concept, core_detail, "
-            "cohesion, evidence_count, quality FROM knowledge_points "
-            "ORDER BY evidence_count DESC"
-        ).fetchall()
-        return [dict(r) for r in rows]
+        return self.kp.get_all()
 
     def get_kp_by_id(self, kp_id: str) -> dict:
-        row = self.conn.execute(
-            "SELECT * FROM knowledge_points WHERE id = ?", (kp_id,)
-        ).fetchone()
-        return dict(row) if row else {}
+        return self.kp.get_by_id(kp_id)
 
     def get_kp_representative_qas(self, kp_id: str, limit: int = 3) -> list[dict]:
-        rows = self.conn.execute(
-            """SELECT q.* FROM qa_pairs q
-               JOIN qa_kp_membership m ON q.id = m.qa_id
-               WHERE m.kp_id = ? AND m.is_representative = 1
-               LIMIT ?""",
-            (kp_id, limit),
-        ).fetchall()
-        if not rows:
-            rows = self.conn.execute(
-                """SELECT q.* FROM qa_pairs q
-                   JOIN qa_kp_membership m ON q.id = m.qa_id
-                   WHERE m.kp_id = ?
-                   ORDER BY m.membership_strength DESC LIMIT ?""",
-                (kp_id, limit),
-            ).fetchall()
-        return [dict(r) for r in rows]
+        return self.kp.get_representative_qas(kp_id, limit)
 
     # ---- KP Edges ----
 
@@ -486,34 +414,10 @@ class QADatabase:
         self.kp.upsert_edge(spec)
 
     def get_kp_edges(self, kp_id: str = None) -> list[dict]:
-        if kp_id:
-            rows = self.conn.execute(
-                "SELECT * FROM kp_edges WHERE source_kp = ? OR target_kp = ?",
-                (kp_id, kp_id),
-            ).fetchall()
-        else:
-            rows = self.conn.execute("SELECT * FROM kp_edges").fetchall()
-        return [dict(r) for r in rows]
+        return self.kp.get_edges(kp_id)
 
     def get_kp_graph(self) -> dict:
-        """Return {kp_id: {prerequisites: [...], dependents: [...]}}."""
-        rows = self.conn.execute(
-            "SELECT source_kp, target_kp, edge_type, confidence FROM kp_edges"
-        ).fetchall()
-        graph: dict[str, dict] = {}
-        for r in rows:
-            s, t = r["source_kp"], r["target_kp"]
-            for k in (s, t):
-                if k not in graph:
-                    graph[k] = {"prerequisites": [], "dependents": []}
-            if r["edge_type"] in ("prerequisite", "corequisite"):
-                graph[t]["prerequisites"].append(
-                    {"kp": s, "type": r["edge_type"], "confidence": r["confidence"]}
-                )
-                graph[s]["dependents"].append(
-                    {"kp": t, "type": r["edge_type"], "confidence": r["confidence"]}
-                )
-        return graph
+        return self.kp.get_graph()
 
     # ---- QA-KP Membership ----
 
@@ -523,14 +427,7 @@ class QADatabase:
         self.kp.set_membership(qa_id, kp_id, membership_strength, is_representative)
 
     def get_kp_qas(self, kp_id: str) -> list[dict]:
-        rows = self.conn.execute(
-            """SELECT q.*, m.membership_strength, m.is_representative
-               FROM qa_pairs q
-               JOIN qa_kp_membership m ON q.id = m.qa_id
-               WHERE m.kp_id = ?""",
-            (kp_id,),
-        ).fetchall()
-        return [dict(r) for r in rows]
+        return self.kp.get_kp_qas(kp_id)
 
     # ---- Student Trajectory ----
 
@@ -539,12 +436,7 @@ class QADatabase:
         self.student.record_trajectory(student_id, kp_id, from_state, to_state, trigger)
 
     def get_student_trajectory(self, student_id: str, limit: int = 20) -> list[dict]:
-        rows = self.conn.execute(
-            """SELECT * FROM student_trajectory
-               WHERE student_id = ? ORDER BY recorded_at DESC LIMIT ?""",
-            (student_id, limit),
-        ).fetchall()
-        return [dict(r) for r in rows]
+        return self.student.get_trajectory(student_id, limit)
 
     # ---- Exam Trends ----
 
@@ -557,16 +449,7 @@ class QADatabase:
                                         trend_summary=trend_summary)
 
     def get_exam_trends(self, kp_id: str = None) -> list[dict]:
-        if kp_id:
-            rows = self.conn.execute(
-                "SELECT * FROM exam_trends WHERE kp_id = ? ORDER BY year, season",
-                (kp_id,),
-            ).fetchall()
-        else:
-            rows = self.conn.execute(
-                "SELECT * FROM exam_trends ORDER BY kp_id, year, season"
-            ).fetchall()
-        return [dict(r) for r in rows]
+        return self.analysis.get_exam_trends(kp_id)
 
     def close(self):
         self._db.close()
@@ -616,8 +499,11 @@ class QARetriever:
         self._id_map: dict[int, int] = {}
         self._embed_model_name: Optional[str] = None
         self._add_lock = threading.Lock()
-        """Lock for add_qa to prevent race conditions when parallel pipeline workers
-        modify _embeddings (ndarray) and _id_map (dict) concurrently."""
+
+    @property
+    def db(self) -> QADatabase:
+        """Public accessor for the underlying QADatabase (replaces _db)."""
+        return self._db
 
     def _ensure_embeddings(self):
         with self._add_lock:

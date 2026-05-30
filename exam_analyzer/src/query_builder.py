@@ -80,31 +80,6 @@ class QueryBuilder:
             row = self.conn.execute(sql).fetchone()
         return row["cnt"] if row else 0
 
-    def count_group(self, table: str, group_col: str, /, **filters) -> list[dict]:
-        """SELECT group_col, COUNT(*) as cnt FROM table [WHERE ...] GROUP BY group_col."""
-        params = []
-        filter_clause = ""
-        if filters:
-            clauses = ["%s=?" % k for k in filters]
-            filter_clause = " WHERE " + " AND ".join(clauses)
-            params = list(filters.values())
-        sql = ("SELECT %s, COUNT(*) as cnt FROM %s%s GROUP BY %s"
-               % (group_col, table, filter_clause, group_col))
-        rows = self.conn.execute(sql, params).fetchall()
-        return [dict(r) for r in rows]
-
-    def aggregate(self, table: str, func: str, col: str, /, **filters) -> float:
-        """SELECT FUNC(col) as val FROM table [WHERE ...]."""
-        params = []
-        filter_clause = ""
-        if filters:
-            clauses = ["%s=?" % k for k in filters]
-            filter_clause = " WHERE " + " AND ".join(clauses)
-            params = list(filters.values())
-        sql = "SELECT %s(%s) as val FROM %s%s" % (func, col, table, filter_clause)
-        row = self.conn.execute(sql, params).fetchone()
-        return row["val"] if row and row["val"] is not None else 0.0
-
     def update(self, table: str, id_value: Any, /, id_col: str = "id", **kv) -> int:
         """UPDATE table SET col1=?, col2=? WHERE id_col=?. Returns rowcount."""
         sets = ["%s=?" % k for k in kv]
