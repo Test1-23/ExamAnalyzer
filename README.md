@@ -109,28 +109,58 @@ python tests/test_suite.py chat     # 聊天端点测试
 ```
 exam_analyzer/
 ├── main.py                  # CLI 入口
-├── app.py                   # Flask Web 服务 + 5-agent 聊天管线
-├── src/                     # 核心库 (14 模块)
-│   ├── pipeline.py          # 流水线编排: Phase 1/2 + 后处理 + 进化循环
-│   ├── knowledge_base.py    # SQLite 数据库 (31表) + 向量检索 + Beta权重
-│   ├── knowledge_graph.py   # QA 聚类 → KP 节点 → 4种边 → 融合
-│   ├── offline_analyzer.py  # 命令动词/难度/依赖分析
-│   ├── adversarial_refiner.py  # KP 拆分/合并 (对抗精炼已退役)
-│   ├── pipeline_diagnostics.py # Fragment迁移 + Topic演化 + 学生反馈
-│   ├── question_generator.py   # 模板提取 + 参数变异生成
-│   ├── deepseek_client.py   # DeepSeek API (Flash + 重试 + JSON提取)
-│   ├── embedding_cluster.py # 模型管理 + 语言检测
-│   ├── pdf_extractor.py     # PDF 文本提取 (pdfplumber → PyMuPDF)
-│   ├── file_pairer.py       # 文件名配对
-│   ├── models.py            # 数据类定义
-│   └── logger.py            # 日志 (RotatingFileHandler)
+├── app.py                   # Flask Web 入口 (薄封装, 44 行)
+├── src/                     # 核心库 (50+ 模块, 三层架构)
+│   ├── connection_manager.py # 数据库连接管理: 唯一 conn 持有者 + WAL + 迁移 + transaction()
+│   ├── query_builder.py     # 轻量 SQL 构建器: %-格式化, 单表 CRUD, raw() 逃逸阀
+│   ├── knowledge_base.py    # QADatabase Facade: 组装 ConnMgr → QueryBuilder → 8 Domain Store
+│   ├── retriever.py         # QARetriever: embedding 相似度搜索 + 双通道检索
+│   ├── schema.py            # 31 表 DDL + 索引 + 版本化迁移
+│   ├── constants.py         # 所有可调参数
+│   ├── stores/              # 8 个领域 Store (类型安全的数据访问层)
+│   │   ├── qa_store.py      # qa_pairs
+│   │   ├── topic_store.py   # dynamic_topics + topic_links + difficulty
+│   │   ├── kp_store.py      # knowledge_points + edges + membership
+│   │   ├── fragment_store.py# ms_fragments + help_map + centrality
+│   │   ├── chat_store.py    # chat_history
+│   │   ├── student_store.py # student memory/state/confusions/trajectory
+│   │   ├── analysis_store.py# api_call_log + feedback + cache + checkpoints + deps
+│   │   └── vector_store.py  # kp_vectors + qa_kp_scores + topic_vectors
+│   ├── web/                 # Flask Blueprint Web 层 (P4 完成)
+│   │   ├── state.py         # 全局共享状态 + 线程安全访问器
+│   │   ├── app_factory.py   # create_app() 工厂
+│   │   └── routes_*.py      # 4 Blueprint, 21 路由
+│   ├── offline/             # 离线分析包
+│   │   ├── verbs.py         # 命令动词提取
+│   │   ├── difficulty.py    # 难度评估 + _evaluate_signal()
+│   │   ├── dependencies.py  # 主题依赖发现
+│   │   └── report.py        # 报告生成 + run_offline_analysis()
+│   ├── diagnostics/         # 后处理诊断包
+│   │   ├── pitfalls.py      # 陷阱发现 + 考试趋势
+│   │   ├── cross_paper.py   # 论文签名 + 基线 + 异常检测
+│   │   ├── student.py       # 学生反馈闭环
+│   │   ├── migration.py     # Fragment 迁移 + Topic 统计
+│   │   └── cascade.py       # Topic 分裂/合并 + 向量级联
+│   ├── prompts/             # Prompt 模板 + Pipeline prompt 封装
+│   ├── chat/                # 对话上下文 + 5-agent 聊天管线
+│   ├── pipeline.py          # Phase 1/2 编排器 + 数据处理辅助函数
+│   ├── knowledge_graph.py   # QA 聚类 → KP 生成 → 边发现 → 融合
+│   ├── adversarial_refiner.py  # KP 拆分/合并
+│   ├── distiller.py         # 蒸馏器 (Flash-based topic distillation)
+│   ├── evolution.py         # 自进化循环
+│   ├── topic_merger.py      # 余弦相似度 + Flash 审核主题合并
+│   └── [其他模块]           # deepseek_client, embedding_cluster, models, utils 等
 ├── eval/                    # 质量评估
 │   └── feedback_agent.py    # 6 维度聊天质量评估
-├── tests/                   # 自动化测试
+├── tests/                   # 自动化测试 (40+ 单元测试 + Mock 基础设施)
+│   ├── conftest.py          # MockFlashClient + mock_db + mock_flash + mock_embedding
+│   ├── test_pure_functions.py  # 纯函数测试
+│   ├── test_store_crud.py   # Store CRUD 测试
+│   ├── test_retrieval.py    # 检索测试
+│   └── test_*.py            # mock 流水线 + 错误处理 + 单元测试
 ├── input/                   # 试卷 PDF (gitignored)
 ├── intermediate/            # SQLite DB + 处理状态 (gitignored)
-├── point/                   # 输出 (gitignored)
-├── logs/                    # 运行日志 (gitignored)
+├── point/                   # 知识点输出 (gitignored)
 └── templates/               # Flask HTML 模板
 ```
 
