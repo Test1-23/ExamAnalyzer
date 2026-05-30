@@ -38,7 +38,7 @@ def start_evaluation():
                 return
             points_file = state.find_points_file()
             from eval.feedback_agent import FeedbackAgent
-            agent = FeedbackAgent(config["api_url"], config["api_key"], retriever._db, points_file)
+            agent = FeedbackAgent(config["api_url"], config["api_key"], retriever.db, points_file)
             state.update_eval_state(progress=30)
             report = agent.run_full_evaluation()
             state.update_eval_state(progress=100, report=report, error=None)

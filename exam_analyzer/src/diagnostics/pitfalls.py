@@ -10,6 +10,8 @@ from ..embedding_cluster import _get_model, TOPIC_EMBED_MODEL, detect_content_la
 from ..models import KPSpec
 from ..constants import (
     SQLITE_PARAM_CHUNK, TOPIC_MERGE_COS_THRESHOLD, TOPIC_MERGE_AMBIGUOUS_THRESHOLD,
+    ANOMALY_ZSCORE_SINGLE, ANOMALY_ZSCORE_SYSTEMIC, SYSTEMIC_DIMENSION_COUNT,
+    DIFFICULTY_HARD_THRESHOLD, DIFFICULTY_EASY_THRESHOLD,
 )
 from ..logger import get_logger
 from ..utils import get_worker_limit
@@ -24,21 +26,8 @@ Two subsystems that run after pipeline completion:
 """
 
 import json
-import statistics
-import numpy as np
-
-from .deepseek_client import create_client
-from .knowledge_base import QADatabase
-from .embedding_cluster import _get_model, TOPIC_EMBED_MODEL, cluster_by_cosine
-from .models import KPSpec
-from .logger import get_logger
 
 _log = get_logger()
-
-from .constants import (
-    ANOMALY_ZSCORE_SINGLE, ANOMALY_ZSCORE_SYSTEMIC, SYSTEMIC_DIMENSION_COUNT,
-    DIFFICULTY_HARD_THRESHOLD, DIFFICULTY_EASY_THRESHOLD,
-)
 
 
 def auto_discover_pitfalls(db: QADatabase, kp_id: str, debug_cb=None) -> list[dict]:

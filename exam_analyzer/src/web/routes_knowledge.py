@@ -70,7 +70,7 @@ def knowledge_graph():
     if retriever is None:
         return jsonify({"error": "no_data", "message": "Analyze exam papers first"}), 400
 
-    db = retriever._db
+    db = retriever.db
     graph = db.get_dependency_graph()
     difficulties = {d["topic"]: d for d in db.get_topic_difficulty()}
 
@@ -135,7 +135,7 @@ def command_verbs():
     retriever = state.get_chat_retriever()
     if retriever is None:
         return jsonify({"error": "no_data", "message": "Analyze exam papers first"}), 400
-    patterns = retriever._db.get_verb_patterns()
+    patterns = retriever.db.get_verb_patterns()
     return jsonify({"verbs": patterns})
 
 
@@ -145,5 +145,5 @@ def topic_difficulty_api():
     if retriever is None:
         return jsonify({"error": "no_data", "message": "Analyze exam papers first"}), 400
     topic = request.args.get("topic", "")
-    difficulties = retriever._db.get_topic_difficulty(topic if topic else None)
+    difficulties = retriever.db.get_topic_difficulty(topic if topic else None)
     return jsonify({"difficulties": difficulties})
