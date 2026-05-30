@@ -40,58 +40,17 @@ from .constants import (
 # ============================================================
 
 def stage2_qa_pairing(pair, client, debug: Callable) -> list:
-    """Call Flash once per paper to match questions with answers."""
+    """Call Flash once per paper to match questions with answers via PromptBuilder."""
     qp_text = pair.qp.full_text
     ms_text = pair.ms.full_text
     debug(f"  QA pairing: {pair.display_name} ({len(qp_text)}c / {len(ms_text)}c)")
 
-    # Detect language for bilingual prompts
-    sample = (qp_text + ms_text)[:2000]
-    lang = detect_content_lang(sample)
+    messages = PromptBuilder.build(
+        PromptType.QA_PAIRING,
+        display_name=pair.display_name,
+        qp_text=qp_text, ms_text=ms_text,
+        lang=detect_content_lang((qp_text + ms_text)[:2000]))
 
-    if lang == 'en':
-        sys = (
-            "You are an exam paper question-answer pairing assistant. "
-            "Match each question in the QP with its answer in the MS. "
-            "Preserve the original question numbering. Output JSON."
-        )
-        usr = (
-            f"Paper: {pair.display_name}\n\n"
-            f"=== Question Paper (QP) ===\n{qp_text}\n\n"
-            f"=== Mark Scheme (MS) ===\n{ms_text}\n\n"
-            "Match each question with its answer.\n"
-            'Return JSON: {"qa_pairs": [{"question_number": "2(a)", "parent_question": "2", "question_text": "...", "answer_text": "..."}]}\n\n'
-            "Notes:\n"
-            "1. question_number: original numbering (e.g. '1(a)', '2(b)(iii)')\n"
-            "2. parent_question: parent question number (e.g. '1', '2'), same as question_number if no sub-questions\n"
-            "3. question_text: use original question text\n"
-            "4. answer_text: use the corresponding mark scheme text (do not omit any mark points)\n"
-            "5. If a question has no answer in the mark scheme, set answer_text to empty string"
-        )
-    else:
-        sys = (
-            "你是一个考试试卷配题助手。将试卷(Question Paper)中的题目"
-            "与答案(Markscheme)中的对应答案配对。保留试卷的原始题目编号结构。Output JSON。"
-        )
-        usr = (
-            f"试卷名称：{pair.display_name}\n\n"
-            f"=== 试卷内容 (QP) ===\n{qp_text}\n\n"
-            f"=== 答案内容 (MS) ===\n{ms_text}\n\n"
-            "请将每个题目与其答案配对。\n"
-            '返回 JSON 格式：\n'
-            '{"qa_pairs": [{"question_number": "2(a)", "parent_question": "2", "question_text": "...", "answer_text": "..."}]}\n\n'
-            "注意：\n"
-            "1. question_number 保留试卷原始编号（如 '1(a)', '2(b)(iii)'）\n"
-            "2. parent_question 为大题编号（如 '1', '2'），无小问时与 question_number 相同\n"
-            "3. question_text 使用题目原文\n"
-            "4. answer_text 使用答案中对应的得分点原文（不要省略任何得分点）\n"
-            "5. 如果某题目在 markscheme 中没有对应答案，answer_text 设为空字符串"
-        )
-
-    messages = [
-        {"role": "system", "content": sys},
-        {"role": "user", "content": usr},
-    ]
     result = call_flash(client, messages, debug_callback=debug)
     raw_pairs = result.get("qa_pairs", [])
     debug(f"  QA pairing: {len(raw_pairs)} questions found")
@@ -162,39 +121,16 @@ def _record_fragment_help(used_ids: set, covered: list, missed_texts: list,
 def _generate_summary(question_text: str, answer_text: str,
                       client, debug: Callable,
                       existing_topics: list = None) -> tuple[str, str]:
+    """Generate Flash summary + topic, reusing existing topics when applicable."""
     lang = detect_content_lang(question_text + answer_text)
-    topic_hint = ""
+    topic_list = ""
     if existing_topics:
-        top_topics = sorted(existing_topics, key=lambda x: -x[1])[:15]  # top 15 by count
+        top_topics = sorted(existing_topics, key=lambda x: -x[1])[:15]
         topic_list = ", ".join(t[0] for t in top_topics)
-        if lang == 'en':
-            topic_hint = (f"\nExisting topics (reuse if applicable): {topic_list}\n"
-                          "If this question matches an existing topic, use that exact name. "
-                          "Only create a new topic name if none of the existing ones fit.\n")
-        else:
-            topic_hint = (f"\n已有主题（若适用请复用）: {topic_list}\n"
-                          "如果这道题匹配已有主题，请使用完全相同的名称。"
-                          "只有在已有主题都不适用时才创建新主题名。\n")
 
-    if lang == 'en':
-        sys = ("You are an exam knowledge classifier. Do two things. Output JSON. "
-               "1. Describe the core concept tested in 1-2 sentences. "
-               "2. Assign a concise topic name.")
-        usr = (f"Question: {question_text}\n\nAnswer: {answer_text}\n\n"
-               f"{topic_hint}"
-               "Do not mention question-specific context (values, filenames, scenarios, names).\n"
-               "Use standard terminology for topic names (e.g. 'Data Compression').\n"
-               'Return JSON: {"summary": "core concept description", "topic": "Topic Name"}')
-    else:
-        sys = ("你是一个考试知识分类专家。同时完成两件事。Output JSON."
-               "1. 用1-2句描述这道题考察的核心技术概念"
-               "2. 分配一个简洁的主题名称")
-        usr = (f"题目: {question_text}\n\n答案: {answer_text}\n\n"
-               f"{topic_hint}"
-               "不要提及题目特定上下文（具体数值、文件名、场景描述、人名）。\n"
-               "主题名称应使用标准术语（如 'Data Compression', 'Interrupt Handling'）。\n"
-               '返回 JSON: {"summary": "核心知识描述", "topic": "标准主题名"}')
-    messages = [{"role": "system", "content": sys}, {"role": "user", "content": usr}]
+    messages = PromptBuilder.build(
+        PromptType.SUMMARY, question_text=question_text,
+        answer_text=answer_text, topic_list=topic_list, lang=lang)
     try:
         result = call_flash(client, messages, max_retries=1, debug_callback=debug)
         if isinstance(result, dict):
@@ -203,7 +139,6 @@ def _generate_summary(question_text: str, answer_text: str,
     except Exception as e:
         debug(f"  summary generation failed: {e}")
         return question_text[:200], "(unnamed)[auto]"
-
 
 def _extract_ms_fragments(answer_text: str, qa_id: int, client, debug: Callable) -> list[dict]:
     """Split a mark scheme answer into individual scoring points. Preserves original wording."""
@@ -296,7 +231,7 @@ def _place_qa_vector_from_kp_scores(db: QADatabase, qa_id: int,
 # -- Round 1: Answer with past QAs (Pro) --
 
 def _build_answer_prompt(question_text: str, similar_qas: list[dict]) -> list:
-    lang = detect_content_lang(question_text)
+    """Build Answer prompt via PromptBuilder (template: _ANSWER_TMPL)."""
     if similar_qas:
         qa_block = ""
         for i, qa in enumerate(similar_qas, 1):
@@ -305,96 +240,17 @@ def _build_answer_prompt(question_text: str, similar_qas: list[dict]) -> list:
     else:
         qa_block = "(Knowledge base is empty, no past Q&As)\n\n"
 
-    if lang == 'en':
-        sys = "You are an exam answering system. Use past Q&A knowledge to answer new questions. Output JSON."
-        usr = (f"{qa_block}=== New Question ===\n{question_text}\n\n"
-               "Tasks:\n"
-               "1. Answer the question using knowledge from past Q&As\n"
-               "2. Mark which past Q&As you used (by number 1, 2...)\n"
-               'Return JSON: {"answer": "...", "used_qa_indices": [1, 3]}')
-    else:
-        sys = "你是一个考试答题系统。利用历史题目的答案来回答新题。Output JSON."
-        usr = (f"{qa_block}=== 新题目 ===\n{question_text}\n\n"
-               "任务:\n"
-               "1. 利用历史题目的知识回答这道新题\n"
-               "2. 标注使用了哪些历史题目（用序号 1, 2...）\n"
-               '返回 JSON: {"answer": "...", "used_qa_indices": [1, 3]}')
-    return [{"role": "system", "content": sys}, {"role": "user", "content": usr}]
-
-
-# -- Round 2: Grade + topic (Flash) --
+    return PromptBuilder.build(
+        PromptType.ANSWER, qa_block=qa_block, question_text=question_text,
+        lang=detect_content_lang(question_text))
 
 def _build_grade_prompt(question_text: str, predicted_answer: str,
                         ms_answer: str) -> list:
-    lang = detect_content_lang(question_text + ms_answer)
-    if lang == 'en':
-        sys = ("You are an exam grading expert. Compare student answer with markscheme point by point. "
-               "Assign a topic name. For every missed point, classify WHY it was missed. Output JSON.")
-        usr = (f"Question: {question_text}\n\n"
-               f"Student Answer: {predicted_answer}\n\n"
-               f"Markscheme: {ms_answer}\n\n"
-               "Tasks:\n"
-               "1. Compare each markscheme point against the student answer\n"
-               "2. List covered points. For each missed point, provide the point text AND a reason:\n"
-               "   - knowledge_gap: student did not mention this concept at all (missing knowledge)\n"
-               "   - misinterpretation: student misunderstood what the question asked for\n"
-               "   - insufficient_detail: student addressed the right idea but lacked precision/completeness\n"
-               "   - retrieval_quality: student's answer was limited by poor reference material\n"
-               "3. Assign a topic (e.g. 'Data Compression', 'Interrupt Handling')\n\n"
-               'Return JSON: {"topic": "Topic Name", "covered_points": ["..."], '
-               '"missed_points": [{"point": "...", "reason": "knowledge_gap"}, ...]}')
-    else:
-        sys = ("你是一个考试批改专家。对比学生答案和标准答案，逐得分点评分。"
-               "对每个遗漏的得分点标注遗漏原因。为这道题分配一个主题名称。Output JSON.")
-        usr = (f"题目: {question_text}\n\n"
-               f"学生答案: {predicted_answer}\n\n"
-               f"标准答案 (Markscheme): {ms_answer}\n\n"
-               "任务:\n"
-               "1. 对比学生答案和标准答案的每个得分点\n"
-               "2. 列出覆盖的得分点。对每个遗漏的得分点，提供内容及遗漏原因：\n"
-               "   - knowledge_gap: 学生答案未涉及此概念（缺乏相关知识）\n"
-               "   - misinterpretation: 学生理解偏了题目要求\n"
-               "   - insufficient_detail: 学生答了方向对但不够精确/完整\n"
-               "   - retrieval_quality: 学生的回答受限于参考材料质量\n"
-               "3. 为这道题分配一个主题（如 'Data Compression', 'Interrupt Handling'）\n\n"
-               '返回 JSON: {"topic": "标准主题名", "covered_points": ["点1"], '
-               '"missed_points": [{"point": "遗漏点A", "reason": "knowledge_gap"}, ...]}')
-    return [{"role": "system", "content": sys}, {"role": "user", "content": usr}]
-
-
-# ============================================================
-# Progress tracker
-# ============================================================
-
-class ProgressTracker:
-    """Tracks real progress based on completed work units. Thread-safe."""
-
-    def __init__(self, total_units: int, callback: Callable, log_cb: Callable = None):
-        self.total = total_units
-        self.done = 0
-        self._lock = threading.Lock()
-        self._cb = callback
-        self._log = log_cb
-
-    def step(self, status: str = ""):
-        with self._lock:
-            self.done += 1
-            pct = min(99, int(100 * self.done / self.total))
-        self._cb(pct, status)
-        if self._log and status:
-            self._log(status, f"{self.done}/{self.total}")
-
-    def set_status(self, status: str):
-        pct = min(99, int(100 * self.done / self.total))
-        self._cb(pct, status)
-
-
-# ============================================================
-# Pipeline
-# ============================================================
-
-# Shared regex for parsing exam filenames like "9618_s23_qp_11"
-_FILENAME_RE = re.compile(r'(\d+)_([smw])(\d{2})_(\d+)')
+    """Build Grade prompt via PromptBuilder (template: _GRADE_TMPL)."""
+    return PromptBuilder.build(
+        PromptType.GRADE, question_text=question_text,
+        predicted_answer=predicted_answer, ms_answer=ms_answer,
+        lang=detect_content_lang(question_text + ms_answer))
 
 def _ensure_session(db, display_name: str) -> Optional[int]:
     """Parse exam paper filename and ensure exam_sessions row exists."""
