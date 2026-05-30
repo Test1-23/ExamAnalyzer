@@ -82,6 +82,7 @@ class QaStore:
                 a, b = s + 1, t - s + 1
                 n_post = a + b
                 p_hat = a / n_post
+                # Wilson 区间 z 值: 1.282=90% 单侧置信下界, ↑更保守的下界
                 z = 1.282
                 z2 = z * z
                 denom = 1.0 + z2 / n_post

@@ -5,6 +5,7 @@ QARetriever: embedding-based similarity search over the QA database.
 """
 
 import sqlite3
+import threading
 import numpy as np
 from typing import List, Optional
 
@@ -614,6 +615,9 @@ class QARetriever:
         self._embeddings: Optional[np.ndarray] = None
         self._id_map: dict[int, int] = {}
         self._embed_model_name: Optional[str] = None
+        self._add_lock = threading.Lock()
+        """Lock for add_qa to prevent race conditions when parallel pipeline workers
+        modify _embeddings (ndarray) and _id_map (dict) concurrently."""
 
     def _ensure_embeddings(self):
         qas = self._db.get_all()
@@ -849,25 +853,26 @@ class QARetriever:
     def add_qa(self, qa_id: int, summary_text: str):
         """Add a new QA vector to the index. Uses raw QA text for embedding
         (consistent with _ensure_embeddings), falls back to summary_text."""
-        if qa_id in self._id_map:
-            return
-        # Fetch QA for raw text; fall back to summary_text if DB unavailable
-        qa = self._db.get(qa_id)
-        if qa and (qa.get("question_text") or qa.get("answer_text")):
-            encode_text = qa["question_text"] + " " + qa["answer_text"]
-        else:
-            encode_text = summary_text or ""
-        # Use the same model as the corpus to keep vectors compatible
-        if self._embed_model_name is None:
-            lang = _detect_language([encode_text])
-            self._embed_model_name = MODEL_MAP[lang]
-        model = _get_model(self._embed_model_name)
-        new_vec = model.encode([encode_text], normalize_embeddings=True, convert_to_numpy=True)[0]
-        if self._embeddings is None or len(self._embeddings) == 0:
-            self._embeddings = new_vec.reshape(1, -1)
-        else:
-            self._embeddings = np.vstack([self._embeddings, new_vec])
-        self._id_map[qa_id] = len(self._embeddings) - 1
+        with self._add_lock:
+            if qa_id in self._id_map:
+                return
+            # Fetch QA for raw text; fall back to summary_text if DB unavailable
+            qa = self._db.get(qa_id)
+            if qa and (qa.get("question_text") or qa.get("answer_text")):
+                encode_text = qa["question_text"] + " " + qa["answer_text"]
+            else:
+                encode_text = summary_text or ""
+            # Use the same model as the corpus to keep vectors compatible
+            if self._embed_model_name is None:
+                lang = _detect_language([encode_text])
+                self._embed_model_name = MODEL_MAP[lang]
+            model = _get_model(self._embed_model_name)
+            new_vec = model.encode([encode_text], normalize_embeddings=True, convert_to_numpy=True)[0]
+            if self._embeddings is None or len(self._embeddings) == 0:
+                self._embeddings = new_vec.reshape(1, -1)
+            else:
+                self._embeddings = np.vstack([self._embeddings, new_vec])
+            self._id_map[qa_id] = len(self._embeddings) - 1
 
     def rebuild(self):
         self._embeddings = None

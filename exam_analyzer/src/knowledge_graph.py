@@ -49,7 +49,8 @@ def _parse_kp_cluster_idx(kp_id: str) -> int | None:
 
 
 def _build_similarity_graph(qa_vectors, threshold=0.70):
-    """Build adjacency graph from QA vectors. Edge if cosine >= threshold."""
+    """Build adjacency graph from QA vectors. Edge if cosine >= threshold.
+    threshold=0.70: 聚类相似度阈值 — ↑更高→更多更小的簇, ↓更低→更少更大的簇"""
     n = len(qa_vectors)
     if n == 0:
         return {}, []
@@ -356,6 +357,7 @@ def discover_kp_edges(db: QADatabase, clustering: dict, kp_ids: list[str],
         for i in range(len(kp_ids_list)):
             for j in range(i + 1, len(kp_ids_list)):
                 cos = float(cos_mat[i][j])
+                # KP 语义边最低阈值: cos>=0.5 建立关联边
                 if cos >= 0.5:
                     a, b = kp_ids_list[i], kp_ids_list[j]
                     db.upsert_kp_edge(KpEdgeSpec(
@@ -363,6 +365,7 @@ def discover_kp_edges(db: QADatabase, clustering: dict, kp_ids: list[str],
                         edge_type="related",
                         semantic_weight=round(cos, 3),
                         combined_strength=round(cos, 3),
+                        # 高置信语义边: cos>=0.65 标记 medium, 低于此值标记 low
                         confidence="medium" if cos >= 0.65 else "low",
                     ))
                     edge_count += 1
@@ -446,6 +449,7 @@ def discover_sequential_edges(db: QADatabase, clustering: dict, kp_ids: list[str
     # Create edges for consistent transitions (>= 3 different papers)
     edge_count = 0
     for (a, b), count in transitions.items():
+        # 时序边: ≥3 场不同考试支持才建立 sequential 边
         num_papers = len(paper_kp_pairs.get((a, b), set()))
         if num_papers >= 3 and a != b:
             db.upsert_kp_edge(KpEdgeSpec(

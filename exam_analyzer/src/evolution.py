@@ -10,7 +10,7 @@ from .deepseek_client import call_flash
 from .embedding_cluster import detect_content_lang, _get_model, TOPIC_EMBED_MODEL
 from .constants import SQLITE_PARAM_CHUNK
 from .knowledge_base import QADatabase
-from .pipeline_diagnostics import run_phase2_cycle, apply_student_feedback
+from .diagnostics import run_phase2_cycle, apply_student_feedback
 
 
 def run_evolution_cycle(db: QADatabase, client, debug) -> None:
@@ -164,7 +164,7 @@ def _generate_kp_for_stable_topics(db: QADatabase, client, debug) -> None:
             detail = result.get("detail", "") if isinstance(result, dict) else ""
         except Exception as e:
             debug(f"  KP generation failed for {topic_id}: {e}")
-            concept = topic["name"]
+            concept = topic["name"] + "[auto]"
             detail = ""
 
         db.set_topic_kp(topic_id, concept, detail)
@@ -195,7 +195,8 @@ def _detect_outlier_qas(db: QADatabase, debug) -> int:
         try:
             vecs = model.encode(answer_texts, normalize_embeddings=True,
                                convert_to_numpy=True, show_progress_bar=False)
-        except Exception:
+        except Exception as e:
+            debug(f"outlier embedding for topic '{topic}': {e}")
             continue
 
         centroid = np.mean(vecs, axis=0)
@@ -211,6 +212,7 @@ def _detect_outlier_qas(db: QADatabase, debug) -> int:
             continue
 
         for i, d in enumerate(distances):
+            # 离群判定: 余弦距离>均值+2σ (离群倍数) 且 >0.25 (离群下限, 避免噪声)
             if d > mean_dist + 2.0 * stdev and d > 0.25:
                 qa = qas[i]
                 with db.transaction():

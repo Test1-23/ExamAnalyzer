@@ -298,6 +298,7 @@ def apply_student_feedback(db: QADatabase):
         topic = row["topic"]
         count = row["cnt"]
 
+        # 学生混淆阈值: ≥5 次混淆才触发难度核查, ≥10 次升级到下一难度等级
         if count >= 5:
             current = db.conn.execute(
                 "SELECT mode_difficulty FROM topic_difficulty WHERE topic=?",
@@ -308,6 +309,7 @@ def apply_student_feedback(db: QADatabase):
                 (current["mode_difficulty"] if current else "basic"), 1
             )
 
+            # 升级条件: count≥10→可升级到最高级, count≥5→可升级到中级
             if count >= 10 and current_level < 3:
                 new_level = current_level + 1
             elif count >= 5 and current_level < 2:
@@ -989,7 +991,7 @@ def _adjust_vectors_from_feedback(db: QADatabase, debug_cb=None) -> dict:
             if cent["verification_count"] < 1:
                 continue
             cohesion = cent.get("topic_coherence", 0.5)
-            # EMA: 60% carry-over + 30% help performance + 10% coherence
+            # EMA 权重分配: 60% 历史中心度 + 30% 帮助性能 + 10% 主题一致性
             new_centrality = (0.60 * cent["centrality_score"]
                               + 0.30 * cent["avg_help_score"]
                               + 0.10 * cohesion)

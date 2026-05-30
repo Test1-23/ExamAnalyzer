@@ -23,6 +23,9 @@ from datetime import datetime
 
 from src.knowledge_base import QADatabase, QARetriever
 from src.deepseek_client import create_client, call_flash
+from src.logger import get_logger
+
+_log = get_logger()
 from src.embedding_cluster import _get_model, MODEL_MAP, _detect_language
 import numpy as np
 
@@ -96,6 +99,7 @@ class FeedbackAgent:
             }, timeout=60)
             return resp.json()
         except Exception as e:
+            _log.warning(f"chat API call: {e}")
             return {"error": str(e), "answer": "", "sources": [], "suggestions": []}
 
     # ================================================================
@@ -150,7 +154,7 @@ class FeedbackAgent:
                                               {"role": "user", "content": usr}], max_retries=1)
             return result if isinstance(result, dict) else {"pass": False, "overall": "poor"}
         except Exception:
-            return {"pass": False, "overall": "poor"}
+            return {"pass": False, "overall": "poor", "_api_error": True}
 
     # ================================================================
     # Evaluation B: Language Compliance
@@ -203,7 +207,7 @@ class FeedbackAgent:
                                               {"role": "user", "content": usr}], max_retries=1)
             return result if isinstance(result, dict) else {"violations": []}
         except Exception:
-            return {"violations": []}
+            return {"violations": [], "_api_error": True}
 
     # ================================================================
     # Evaluation C: Source Honesty
@@ -253,7 +257,7 @@ class FeedbackAgent:
                                               {"role": "user", "content": usr}], max_retries=1)
             return result if isinstance(result, dict) else {"honest": True, "fabricated": []}
         except Exception:
-            return {"honest": True, "fabricated": []}
+            return {"honest": True, "fabricated": [], "_api_error": True}
 
     # ================================================================
     # Evaluation D: Paper Coverage
@@ -326,9 +330,10 @@ class FeedbackAgent:
                 vecs = model.encode([pitfall, answer_text], normalize_embeddings=True, convert_to_numpy=True)
                 cos = float(np.dot(vecs[0], vecs[1]))
                 is_rel = cos >= 0.40
-            except Exception:
-                is_rel = True
-                cos = 1.0  # give benefit of doubt
+            except Exception as e:
+                _log.warning(f"embedding relevance check: {e}")
+                is_rel = None
+                cos = 0.0
             if is_rel:
                 relevant += 1
             else:
@@ -352,7 +357,8 @@ class FeedbackAgent:
         try:
             with open(self.points_file, "r", encoding="utf-8") as f:
                 content = f.read()
-        except Exception:
+        except Exception as e:
+            _log.warning(f"points file read: {e}")
             return kps
         current_topic = ""
         for block in content.split("\n\n"):

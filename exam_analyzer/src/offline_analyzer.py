@@ -1062,8 +1062,8 @@ def _write_verb_report(db: QADatabase, output_dir: str, subject_code: str):
                 tsp = json.loads(p["topic_specific_patterns"])
                 for topic, note in tsp.items():
                     lines.append(f"    [{topic}] {note}")
-            except Exception:
-                pass
+            except Exception as e:
+                _log.warning(f"verb pattern JSON parse: {e}")
         lines.append("")
 
     with open(out_path, "w", encoding="utf-8") as f:
