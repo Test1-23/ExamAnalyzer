@@ -252,6 +252,8 @@ def _build_grade_prompt(question_text: str, predicted_answer: str,
         predicted_answer=predicted_answer, ms_answer=ms_answer,
         lang=detect_content_lang(question_text + ms_answer))
 
+_FILENAME_RE = re.compile(r'^(\d+)_([smw])(\d{2})_(\d+)')
+
 def _ensure_session(db, display_name: str) -> Optional[int]:
     """Parse exam paper filename and ensure exam_sessions row exists."""
     m = _FILENAME_RE.match(display_name)
