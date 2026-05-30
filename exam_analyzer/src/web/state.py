@@ -151,8 +151,9 @@ def warmup_chat_retriever():
 def invalidate_chat_retriever():
     """Clear cached retriever + release embedding models (called before new analysis)."""
     global _chat_retriever, _chat_retriever_db_path
-    _chat_retriever = None
-    _chat_retriever_db_path = None
+    with _chat_retriever_lock:
+        _chat_retriever = None
+        _chat_retriever_db_path = None
     try:
         from src.embedding_cluster import clear_model_cache
         clear_model_cache()

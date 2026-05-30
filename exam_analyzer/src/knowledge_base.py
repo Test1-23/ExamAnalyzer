@@ -620,6 +620,10 @@ class QARetriever:
         modify _embeddings (ndarray) and _id_map (dict) concurrently."""
 
     def _ensure_embeddings(self):
+        with self._add_lock:
+            self._ensure_embeddings_locked()
+
+    def _ensure_embeddings_locked(self):
         qas = self._db.get_all()
         if not qas:
             self._embeddings = np.empty((0, 384))
