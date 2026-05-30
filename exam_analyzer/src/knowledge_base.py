@@ -19,7 +19,14 @@ from .retriever import QARetriever, make_topic_id, log_schema_status  # re-expor
 # ============================================================
 
 class QADatabase:
-    """Stores and retrieves question-answer pairs with embedding support."""
+    """Facade assembling ConnectionMgr → QueryBuilder → 8 Domain Stores.
+
+    Interface freeze policy (2026-05-31): No new methods shall be added to this
+    class.  New data access should use the Store directly: ``db.qa.insert(...)``,
+    ``db.topic.upsert_link(...)``, etc.  Existing proxy methods remain for
+    backward compatibility but are conceptually deprecated.
+    """
+
 
     def __init__(self, db_path: str):
         self.db_path = db_path

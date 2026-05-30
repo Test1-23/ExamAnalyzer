@@ -197,6 +197,22 @@ def _ensure_session(db, display_name: str) -> Optional[int]:
     return row["id"] if row else None
 
 
+def _run_kp_refinement(db, client, debug):
+    """KP structural refinement: auto-split + auto-merge (behavior-driven)."""
+    kps = db.get_all_kps()
+    for kp in kps:
+        if kp.get("evidence_count", 0) >= 6:
+            auto_split_kp(db, kp["id"], client, debug_cb=debug)
+    kps = db.get_all_kps()
+    all_kp_ids = [k["id"] for k in kps]
+    if len(all_kp_ids) >= 2:
+        consistency = cross_kp_consistency(db, all_kp_ids[:30], client, debug_cb=debug)
+        merged_count = auto_merge_kps(db, consistency.get("issues", []), debug_cb=debug)
+        if merged_count:
+            debug(f"Auto-merge: {merged_count} KP pairs merged")
+    debug("KP structural refinement complete (behavior-driven split/merge/consistency)")
+
+
 def run_pipeline(
     api_url: str,
     api_key: str,
@@ -601,7 +617,12 @@ def run_pipeline(
 
             _debug(f"[{display_name}] KB: {db.count()} entries")
 
-            # Phase 2 summary: retrieval quality + miss categories for this paper
+            # Phase 2 summary: per-paper success/failure + retrieval quality
+            total = len(qa_pairs)
+            succeeded = len(qa_results)
+            if succeeded < total:
+                _debug(f"  [Phase2] {display_name}: {succeeded}/{total} questions succeeded, {total - succeeded} failed")
+
             try:
                 fb_rows = db.conn.execute(
                     """SELECT SUM(retrieval_count) as tot_ret, SUM(used_qa_count) as tot_used,
@@ -726,56 +747,20 @@ def run_pipeline(
                    any(src == topic and dst != topic for (src, dst) in topic_links):
                     db.conn.execute("UPDATE qa_pairs SET is_cross_topic = 1 WHERE id = ?", (qa["id"],))
 
-    # -- Knowledge graph: QA clustering → KP nodes → edge discovery --
-    try:
-        _debug("Building knowledge graph (clustering QAs into KPs)...")
-        _log("Knowledge graph", "Starting")
-        run_knowledge_graph(db, api_url, api_key, debug_callback=_debug)
-    except Exception as e:
-        log_stage_error("Knowledge graph", _debug, e)
-
-    # -- KP structural refinement: auto-split + auto-merge (behavior-driven) --
-    try:
-        _debug("Running KP structural refinement (split/merge)...")
-        kps = db.get_all_kps()
-        for kp in kps:
-            if kp.get("evidence_count", 0) >= 6:
-                auto_split_kp(db, kp["id"], client, debug_cb=_debug)
-        # Re-fetch: auto_split may have created new KPs
-        kps = db.get_all_kps()
-        all_kp_ids = [k["id"] for k in kps]
-        if len(all_kp_ids) >= 2:
-            consistency = cross_kp_consistency(db, all_kp_ids[:30], client, debug_cb=_debug)
-            merged_count = auto_merge_kps(db, consistency.get("issues", []), debug_cb=_debug)
-            if merged_count:
-                _debug(f"Auto-merge: {merged_count} KP pairs merged")
-        _debug("KP structural refinement complete (behavior-driven split/merge/consistency)")
-    except Exception as e:
-        log_stage_error("KP structural refinement", _debug, e)
-
-    # -- Offline analysis (command verbs, difficulty, dependencies) --
-    try:
-        _debug("Starting offline analysis (verbs, difficulty, dependencies)...")
-        _log("Offline analysis", "Starting")
-        run_offline_analysis(db, api_url, api_key,
-                             progress_callback=_progress,
-                             debug_callback=_debug)
-    except Exception as e:
-        log_stage_error("Offline analysis", _debug, e)
-
-    # -- Pipeline diagnostics (closed-loop + cross-paper) --
-    try:
-        _debug("Running pipeline diagnostics (closed-loop)...")
-        run_closed_loop(db, api_url, api_key,
-                        debug_callback=_debug)
-    except Exception as e:
-        log_stage_error("Closed-loop diagnostics", _debug, e)
-
-    # -- Self-evolving loop: detect drift, trigger re-review --
-    try:
-        run_evolution_cycle(db, client, _debug)
-    except Exception as e:
-        log_stage_error("Evolution cycle", _debug, e)
+    # -- Post-processing stages --
+    for label, stage_fn in [
+        ("Knowledge graph", lambda: run_knowledge_graph(db, api_url, api_key, debug_callback=_debug)),
+        ("KP structural refinement", lambda: _run_kp_refinement(db, client, _debug)),
+        ("Offline analysis", lambda: run_offline_analysis(db, api_url, api_key, progress_callback=_progress, debug_callback=_debug)),
+        ("Pipeline diagnostics", lambda: run_closed_loop(db, api_url, api_key, debug_callback=_debug)),
+        ("Evolution cycle", lambda: run_evolution_cycle(db, client, _debug)),
+    ]:
+        try:
+            _debug(f"Running {label.lower()}...")
+            _log(label, "Starting")
+            stage_fn()
+        except Exception as e:
+            log_stage_error(label, _debug, e)
 
     _progress(100, "Analysis complete")
     db.close()
