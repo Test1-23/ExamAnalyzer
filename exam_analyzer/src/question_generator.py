@@ -167,7 +167,8 @@ def generate_answer(question: str, kp_id: str, db: QADatabase, client, debug_cb=
             {"role": "user", "content": validate_usr},
         ], max_retries=1, debug_callback=debug_cb)
         val_result = val_result if isinstance(val_result, dict) else {}
-    except Exception:
+    except Exception as e:
+        if debug_cb: debug_cb(f"Answer validation API failed: {e}")
         val_result = {}
 
     covered = len(val_result.get("covered_points", []))

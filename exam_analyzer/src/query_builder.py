@@ -39,18 +39,6 @@ class QueryBuilder:
         self._mgr.maybe_commit()
         return cur.lastrowid
 
-    def upsert(self, table: str, /, keys: Optional[list[str]] = None, **values) -> None:
-        """INSERT OR REPLACE INTO table (cols) VALUES (?, ...).
-
-        For ON CONFLICT DO UPDATE patterns, use ``raw()`` instead.
-        """
-        cols = list(values.keys())
-        placeholders = ", ".join(["?"] * len(cols))
-        sql = ("INSERT OR REPLACE INTO %s (%s) VALUES (%s)"
-               % (table, ", ".join(cols), placeholders))
-        self.conn.execute(sql, list(values.values()))
-        self._mgr.maybe_commit()
-
     def get(self, table: str, id_value: Any, id_col: str = "id") -> Optional[dict]:
         """SELECT * FROM table WHERE id_col = ?."""
         sql = "SELECT * FROM %s WHERE %s=?" % (table, id_col)

@@ -393,9 +393,12 @@ class ProgressTracker:
 # Pipeline
 # ============================================================
 
+# Shared regex for parsing exam filenames like "9618_s23_qp_11"
+_FILENAME_RE = re.compile(r'(\d+)_([smw])(\d{2})_(\d+)')
+
 def _ensure_session(db, display_name: str) -> Optional[int]:
     """Parse exam paper filename and ensure exam_sessions row exists."""
-    m = re.match(r'^(\d+)_([smw])(\d{2})_(\d+)', display_name)
+    m = _FILENAME_RE.match(display_name)
     if not m:
         return None
     season_map = {'s': 'S1', 'w': 'S2', 'm': 'S3'}
@@ -451,8 +454,8 @@ def run_pipeline(
 
     # Sort by year ascending: earliest papers first → Phase 1 gets foundational content
     def _parse_year(display_name):
-        m = re.search(r'[smw](\d{2})_', display_name)
-        return 2000 + int(m.group(1)) if m else 9999
+        m = _FILENAME_RE.search(display_name)
+        return 2000 + int(m.group(3)) if m else 9999  # 9999 = unknown year, sorts last
     pairs.sort(key=lambda p: _parse_year(p[2]))
 
     # Log processing order

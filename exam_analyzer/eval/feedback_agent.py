@@ -153,7 +153,8 @@ class FeedbackAgent:
             result = call_flash(self.client, [{"role": "system", "content": sys},
                                               {"role": "user", "content": usr}], max_retries=1)
             return result if isinstance(result, dict) else {"pass": False, "overall": "poor"}
-        except Exception:
+        except Exception as e:
+            _log.warning(f"_score_answer API error: {e}")
             return {"pass": False, "overall": "poor", "_api_error": True}
 
     # ================================================================
@@ -206,7 +207,8 @@ class FeedbackAgent:
             result = call_flash(self.client, [{"role": "system", "content": sys},
                                               {"role": "user", "content": usr}], max_retries=1)
             return result if isinstance(result, dict) else {"violations": []}
-        except Exception:
+        except Exception as e:
+            _log.warning(f"_check_translation API error: {e}")
             return {"violations": [], "_api_error": True}
 
     # ================================================================
@@ -256,7 +258,8 @@ class FeedbackAgent:
             result = call_flash(self.client, [{"role": "system", "content": sys},
                                               {"role": "user", "content": usr}], max_retries=1)
             return result if isinstance(result, dict) else {"honest": True, "fabricated": []}
-        except Exception:
+        except Exception as e:
+            _log.warning(f"_verify_sources API error: {e}")
             return {"honest": True, "fabricated": [], "_api_error": True}
 
     # ================================================================
@@ -495,6 +498,16 @@ class FeedbackAgent:
         lines.append("=" * 64)
         lines.append(f"  聊天 Agent 质量评估报告 — {ts}")
         lines.append("=" * 64)
+
+        # Check for API errors that may have skewed results
+        api_errors = []
+        for dim_key, dim_label in [("accuracy", "回答准确性"), ("language", "语言合规"),
+                                     ("honesty", "溯源诚实性")]:
+            dim = self.results.get(dim_key, {})
+            if dim.get("_api_error"):
+                api_errors.append(dim_label)
+        if api_errors:
+            lines.append(f"  ⚠ [API ERROR] 以下维度因API调用失败, 结果不可靠: {', '.join(api_errors)}")
         lines.append("")
 
         # Section 1: Accuracy

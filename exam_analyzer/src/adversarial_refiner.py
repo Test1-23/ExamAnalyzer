@@ -315,28 +315,28 @@ def auto_split_kp(db: QADatabase, kp_id: str, client, debug_cb=None) -> list[str
         qa_texts += f"[{qa['id']}] {qa['question_text'][:200]}\n  A: {qa['answer_text'][:200]}\n\n"
         prompt_qa_ids.append(qa["id"])
 
+    # Build example IDs using json.dumps for safe injection (handles int/float/str)
+    example_ids = all_qa_ids[:2] if len(all_qa_ids) >= 2 else all_qa_ids
+    ex_a_json = json.dumps([example_ids[0]])
+    ex_b_json = json.dumps([example_ids[-1] if len(example_ids) >= 2 else example_ids[0]])
+
     if lang == 'en':
         sys = "Decide whether this KP should be split into two. Output JSON."
-        # Use real DB IDs in the example so Flash returns actual IDs, not position indices
-        example_ids = all_qa_ids[:2] if len(all_qa_ids) >= 2 else all_qa_ids
-        ex_a, ex_b = example_ids[0], example_ids[-1] if len(example_ids) >= 2 else example_ids[0]
         usr = (
             f"KP: [{kp['name']}] — {kp.get('core_concept', '') or kp.get('description', '')}\n\n"
             f"Member QAs:\n{qa_texts}\n"
             "Should this KP be split? If yes, provide two sub-concepts and assign each QA to one.\n"
-            f'Return: {{"split": true/false, "kp_a": {{"concept": "...", "qa_ids": [{ex_a}]}}, '
-            f'"kp_b": {{"concept": "...", "qa_ids": [{ex_b}]}}}}'
+            f'Return: {{"split": true/false, "kp_a": {{"concept": "...", "qa_ids": {ex_a_json}}}, '
+            f'"kp_b": {{"concept": "...", "qa_ids": {ex_b_json}}}}}'
         )
     else:
         sys = "判断此KP是否应拆分为两个。Output JSON。"
-        example_ids = all_qa_ids[:2] if len(all_qa_ids) >= 2 else all_qa_ids
-        ex_a, ex_b = example_ids[0], example_ids[-1] if len(example_ids) >= 2 else example_ids[0]
         usr = (
             f"KP: [{kp['name']}] — {kp.get('core_concept', '') or kp.get('description', '')}\n\n"
             f"成员QA:\n{qa_texts}\n"
             "此KP是否应拆分？若是，提供两个子概念并分配QA。\n"
-            f'返回: {{"split": true/false, "kp_a": {{"concept": "...", "qa_ids": [{ex_a}]}}, '
-            f'"kp_b": {{"concept": "...", "qa_ids": [{ex_b}]}}}}'
+            f'返回: {{"split": true/false, "kp_a": {{"concept": "...", "qa_ids": {ex_a_json}}}, '
+            f'"kp_b": {{"concept": "...", "qa_ids": {ex_b_json}}}}}'
         )
 
     messages = [{"role": "system", "content": sys}, {"role": "user", "content": usr}]
