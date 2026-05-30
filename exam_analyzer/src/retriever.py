@@ -185,41 +185,19 @@ class QARetriever:
 
         # B1: Topic affiliation — QAs in the same or adjacent topics
         if query_topic:
-            topic_rows = self._db.conn.execute(
-                "SELECT id, topic FROM qa_pairs WHERE topic=? AND topic!='' LIMIT 20",
-                (query_topic,)
-            ).fetchall()
+            topic_rows = self._db.qa.get_by_topic(query_topic, limit=20)
             channel_b_ids.update(r["id"] for r in topic_rows)
 
             # Adjacent topics via topic_links
-            adj_rows = self._db.conn.execute(
-                "SELECT DISTINCT dst_topic FROM topic_links WHERE src_topic=? UNION "
-                "SELECT DISTINCT src_topic FROM topic_links WHERE dst_topic=?",
-                (query_topic, query_topic)
-            ).fetchall()
-            for adj in adj_rows[:5]:
-                adj_rows2 = self._db.conn.execute(
-                    "SELECT id FROM qa_pairs WHERE topic=? LIMIT 10",
-                    (adj["dst_topic"],)
-                ).fetchall()
-                channel_b_ids.update(r["id"] for r in adj_rows2)
+            for adj_topic in self._db.topic.get_adjacent_topics(query_topic)[:5]:
+                adj_qas = self._db.qa.get_by_topic(adj_topic, limit=10)
+                channel_b_ids.update(r["id"] for r in adj_qas)
 
         # B2: Graph walk — QAs whose fragments helped same questions
-        walk_source = list(channel_a_ids)[:15] if channel_a_ids else []  # single conversion, reused
+        walk_source = list(channel_a_ids)[:15] if channel_a_ids else []
         if walk_source:
-            placeholders_a = ",".join("?" * len(walk_source))
-            walk_rows = self._db.conn.execute(
-                f"SELECT DISTINCT f2.qa_id FROM ("
-                f"SELECT DISTINCT fhm1.helped_qa_id FROM fragment_help_map fhm1 "
-                f"JOIN ms_fragments mf1 ON fhm1.fragment_id = mf1.point_id "
-                f"WHERE mf1.qa_id IN ({placeholders_a})"
-                f") shared_helps "
-                f"JOIN fragment_help_map fhm2 ON shared_helps.helped_qa_id = fhm2.helped_qa_id "
-                f"JOIN ms_fragments f2 ON fhm2.fragment_id = f2.point_id "
-                f"LIMIT 30",
-                walk_source
-            ).fetchall()
-            channel_b_ids.update(r["qa_id"] for r in walk_rows)
+            walk_qa_ids = self._db.fragment.get_second_order_qas(walk_source, limit=30)
+            channel_b_ids.update(walk_qa_ids)
 
         # Remove Channel A overlap
         channel_b_ids -= channel_a_ids
@@ -241,50 +219,25 @@ class QARetriever:
                 qa["_channel"] = "structure"
                 candidates.append(qa)
 
-        # Pre-load topic adjacency for fast lookup (avoid O(N) DB queries)
-        candidate_topics = {qa.get("topic", "") for qa in candidates if qa.get("topic")}
-        adjacency_map = {}
-        if query_topic and candidate_topics:
-            for ct in candidate_topics:
-                adj_row = self._db.conn.execute(
-                    "SELECT COUNT(*) as cnt FROM topic_links "
-                    "WHERE (src_topic=? AND dst_topic=?) OR (src_topic=? AND dst_topic=?)",
-                    (query_topic, ct, ct, query_topic)
-                ).fetchone()
-                if adj_row and adj_row["cnt"] > 0:
-                    adjacency_map[ct] = True
+        # Pre-load topic adjacency for fast lookup (one query, not O(N))
+        candidate_topics = [qa.get("topic", "") for qa in candidates if qa.get("topic")]
+        linked_topics = self._db.topic.get_linked_mask(query_topic, candidate_topics) if query_topic and candidate_topics else set()
 
         # Pre-load helped question set from Channel A (reuse walk_source, one query)
-        helped_qa_set = set()
-        if walk_source:
-            bh_all_rows = self._db.conn.execute(
-                f"SELECT DISTINCT helped_qa_id FROM fragment_help_map fhm2 "
-                f"JOIN ms_fragments mf2 ON fhm2.fragment_id = mf2.point_id "
-                f"WHERE mf2.qa_id IN ({','.join('?' * len(walk_source))})",
-                walk_source
-            ).fetchall()
-            helped_qa_set = {r["helped_qa_id"] for r in bh_all_rows}
+        helped_qa_set = self._db.fragment.get_helped_qas(walk_source) if walk_source else set()
 
         # Behavior scores: chunked batch to avoid SQLite 999-param limit
         candidate_qa_ids = [qa["id"] for qa in candidates]
         behavior_scores = {}
         if helped_qa_set and candidate_qa_ids:
             helped_list = list(helped_qa_set)
-            CHUNK = BEHAVIOR_CHUNK   # leave room for candidate_qa_ids chunk
+            CHUNK = BEHAVIOR_CHUNK
             for i in range(0, len(candidate_qa_ids), CHUNK):
                 c_chunk = candidate_qa_ids[i:i + CHUNK]
                 for j in range(0, len(helped_list), CHUNK):
                     h_chunk = helped_list[j:j + CHUNK]
-                    bh_batch_rows = self._db.conn.execute(
-                        f"SELECT mf.qa_id, COUNT(*) as cnt FROM fragment_help_map fhm "
-                        f"JOIN ms_fragments mf ON fhm.fragment_id = mf.point_id "
-                        f"WHERE mf.qa_id IN ({','.join('?' * len(c_chunk))})"
-                        f" AND fhm.helped_qa_id IN ({','.join('?' * len(h_chunk))})"
-                        f" GROUP BY mf.qa_id",
-                        c_chunk + h_chunk
-                    ).fetchall()
-                    for r in bh_batch_rows:
-                        behavior_scores[r["qa_id"]] = min(1.0, r["cnt"] / 10.0)
+                    batch_scores = self._db.fragment.get_behavior_scores(c_chunk, h_chunk)
+                    behavior_scores.update(batch_scores)
 
         # Mixed ranking (pre-loaded data, zero DB queries)
         for qa in candidates:
@@ -295,7 +248,7 @@ class QARetriever:
             if query_topic and qa_topic:
                 if qa_topic == query_topic:
                     topic_score = 1.0
-                elif qa_topic in adjacency_map:
+                elif qa_topic in linked_topics:
                     topic_score = 0.5
 
             behavior_score = behavior_scores.get(qa["id"], 0.0)

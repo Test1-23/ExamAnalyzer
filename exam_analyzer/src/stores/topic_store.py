@@ -67,6 +67,30 @@ class TopicStore:
         rows = self._qb.get_where("fragment_membership", topic_id=topic_id)
         return [r["fragment_id"] for r in rows]
 
+    def get_adjacent_topics(self, topic: str) -> list[str]:
+        """Return topic names linked to `topic` via topic_links (both directions)."""
+        rows = self._qb.conn.execute(
+            "SELECT DISTINCT dst_topic FROM topic_links WHERE src_topic=? UNION "
+            "SELECT DISTINCT src_topic FROM topic_links WHERE dst_topic=?",
+            (topic, topic),
+        ).fetchall()
+        return [r["dst_topic"] for r in rows]
+
+    def get_linked_mask(self, query_topic: str, candidates: list[str]) -> set[str]:
+        """Return the subset of `candidates` that have a topic_link with `query_topic`."""
+        if not candidates:
+            return set()
+        ph = ",".join("?" * len(candidates))
+        params = (query_topic,) + tuple(candidates) + tuple(candidates) + (query_topic,)
+        rows = self._qb.conn.execute(
+            f"SELECT DISTINCT dst_topic FROM topic_links "
+            f"WHERE src_topic=? AND dst_topic IN ({ph}) UNION "
+            f"SELECT DISTINCT src_topic FROM topic_links "
+            f"WHERE src_topic IN ({ph}) AND dst_topic=?",
+            params,
+        ).fetchall()
+        return {r["dst_topic"] for r in rows}
+
     # -- Topic Links --
 
     def upsert_link(self, src_topic: str, dst_topic: str, count: int = 1):
