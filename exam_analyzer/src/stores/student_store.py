@@ -62,3 +62,15 @@ class StudentStore:
                            student_id=student_id, kp_id=kp_id,
                            from_state=from_state, to_state=to_state,
                            trigger=trigger)
+
+    def get_all_trajectories(self) -> list[dict]:
+        """Return all student trajectories ordered by student_id, recorded_at.
+
+        Used by knowledge_graph.discover_learning_path_edges() to find KP
+        transitions within student sessions.
+        """
+        rows = self._qb.conn.execute(
+            "SELECT student_id, kp_id, recorded_at FROM student_trajectory "
+            "ORDER BY student_id, recorded_at"
+        ).fetchall()
+        return [dict(r) for r in rows]

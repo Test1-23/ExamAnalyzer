@@ -37,6 +37,45 @@ def _build_qa_to_kp_mapping(clusters, qa_list, kp_ids):
     return qa_to_kp
 
 
+def _compute_sequential_transitions(qa_list, clusters, kp_ids):
+    """Compute KP transition counts from exam question ordering.
+
+    Pure function — zero DB interaction. Accepts QA list, cluster indices,
+    and KP IDs; returns transition counts and per-pair paper evidence sets.
+
+    Returns:
+        (transitions, paper_kp_pairs) where:
+        - transitions: {(kp_a, kp_b): count} — how many papers exhibit A→B
+        - paper_kp_pairs: {(kp_a, kp_b): {paper_names}} — which papers
+    """
+    qa_to_kp = _build_qa_to_kp_mapping(clusters, qa_list, kp_ids)
+
+    # Group QAs by paper, sort by question_number (natural sort)
+    paper_order = {}
+    for qa in qa_list:
+        paper = qa.get("paper", "")
+        qn = qa.get("question_number", "")
+        if paper and qn:
+            paper_order.setdefault(paper, []).append((qn, qa["id"]))
+
+    # Count KP transitions within papers
+    transitions = {}
+    paper_kp_pairs = {}
+    for paper, qas in paper_order.items():
+        qas.sort(key=lambda x: _qn_sort_key(x[0]))
+        seen_kps = []
+        for _, qa_id in qas:
+            kp = qa_to_kp.get(qa_id)
+            if kp and (not seen_kps or seen_kps[-1] != kp):
+                seen_kps.append(kp)
+        for i in range(len(seen_kps) - 1):
+            pair = (seen_kps[i], seen_kps[i + 1])
+            transitions[pair] = transitions.get(pair, 0) + 1
+            paper_kp_pairs.setdefault(pair, set()).add(paper)
+
+    return transitions, paper_kp_pairs
+
+
 def _transition_weight(count: int) -> float:
     """Normalize transition count to [0, 1] weight."""
     return min(count / EDGE_TRANSITION_DIVISOR, 1.0)
@@ -46,6 +85,14 @@ def _parse_kp_cluster_idx(kp_id: str) -> int | None:
     """Extract cluster index from KP ID, handling auto-split suffixes like 'kp_0000s0'."""
     m = re.match(r'kp_(\d+)', kp_id)
     return int(m.group(1)) if m else None
+
+
+def _qn_sort_key(qn: str) -> tuple:
+    """Natural sort key for question numbers: "1(a)" -> (1, "a"), "10(a)" -> (10, "a")."""
+    m = re.match(r'^(\d+)', qn)
+    num = int(m.group(1)) if m else 0
+    suffix = qn[m.end():] if m else qn
+    return (num, suffix)
 
 
 def _build_similarity_graph(qa_vectors, threshold=0.70):
@@ -323,6 +370,63 @@ def generate_kps(db: QADatabase, clustering: dict, client, debug_cb=None) -> lis
     return kp_ids
 
 
+def _compute_retrieval_candidates(topic_links: dict, qa_list: list[dict],
+                                   qa_to_kp: dict) -> list[tuple]:
+    """Compute retrieval edge candidates from topic link counts.
+
+    Pure function — zero DB interaction. Accepts topic_links dict (from
+    db.get_topic_links()), QA list, and QA→KP mapping. Returns list of
+    (target_kp, source_kp, count) tuples for topic pairs with count >= 2.
+    Direction is reversed: dst_topic→source_kp, src_topic→target_kp.
+
+    Caller is responsible for creating KpEdgeSpec and calling db.upsert_kp_edge().
+    """
+    candidates = []
+    for (src_topic, dst_topic), count in topic_links.items():
+        if count < 2:
+            continue
+        src_kps = set()
+        dst_kps = set()
+        for qa in qa_list:
+            if qa.get("topic") == src_topic and qa["id"] in qa_to_kp:
+                src_kps.add(qa_to_kp[qa["id"]])
+            if qa.get("topic") == dst_topic and qa["id"] in qa_to_kp:
+                dst_kps.add(qa_to_kp[qa["id"]])
+        for sk in src_kps:
+            for dk in dst_kps:
+                if sk != dk:
+                    candidates.append((dk, sk, count))  # reversed direction
+    return candidates
+
+
+def _compute_semantic_edges(kp_centroids: dict) -> list[tuple]:
+    """Compute semantic edge candidates from KP centroid cosine similarity.
+
+    Pure function — zero DB interaction. Accepts {kp_id: ndarray} dict,
+    returns list of (kp_a, kp_b, cos_score, confidence) tuples for pairs
+    with cosine >= 0.5.
+
+    Confidence: "medium" if cos >= 0.65, else "low".
+    """
+    candidates = []
+    if len(kp_centroids) < 2:
+        return candidates
+
+    kp_ids_list = list(kp_centroids.keys())
+    centroids_mat = np.stack([kp_centroids[k] for k in kp_ids_list])
+    cos_mat = centroids_mat @ centroids_mat.T
+    for i in range(len(kp_ids_list)):
+        for j in range(i + 1, len(kp_ids_list)):
+            cos = float(cos_mat[i][j])
+            if cos >= 0.5:
+                candidates.append((
+                    kp_ids_list[i], kp_ids_list[j],
+                    round(cos, 3),
+                    "medium" if cos >= 0.65 else "low",
+                ))
+    return candidates
+
+
 def discover_kp_edges(db: QADatabase, clustering: dict, kp_ids: list[str],
                       debug_cb=None) -> int:
     """Discover edges between KPs: retrieval (Phase 2 behavior) + semantic (embedding).
@@ -339,7 +443,7 @@ def discover_kp_edges(db: QADatabase, clustering: dict, kp_ids: list[str],
     centroids_list = clustering["centroids"]
     clusters = clustering["clusters"]
 
-    # Build KP centroid matrix for semantic edges
+    # Build KP centroid map for semantic edges
     kp_centroids = {}
     for kp_id in kp_ids:
         cluster_idx = _parse_kp_cluster_idx(kp_id)
@@ -348,55 +452,31 @@ def discover_kp_edges(db: QADatabase, clustering: dict, kp_ids: list[str],
                 and centroids_list[cluster_idx] is not None):
             kp_centroids[kp_id] = centroids_list[cluster_idx]
 
-    # Semantic edges: cosine between KP centroids
+    # Semantic edges: cosine between KP centroids (computation extracted)
     edge_count = 0
-    if len(kp_centroids) >= 2:
-        kp_ids_list = list(kp_centroids.keys())
-        centroids_mat = np.stack([kp_centroids[k] for k in kp_ids_list])
-        cos_mat = centroids_mat @ centroids_mat.T
-        for i in range(len(kp_ids_list)):
-            for j in range(i + 1, len(kp_ids_list)):
-                cos = float(cos_mat[i][j])
-                # KP 语义边最低阈值: cos>=0.5 建立关联边
-                if cos >= 0.5:
-                    a, b = kp_ids_list[i], kp_ids_list[j]
-                    db.upsert_kp_edge(KpEdgeSpec(
-                        source_kp=a, target_kp=b,
-                        edge_type="related",
-                        semantic_weight=round(cos, 3),
-                        combined_strength=round(cos, 3),
-                        # 高置信语义边: cos>=0.65 标记 medium, 低于此值标记 low
-                        confidence="medium" if cos >= 0.65 else "low",
-                    ))
-                    edge_count += 1
+    for a, b, cos, confidence in _compute_semantic_edges(kp_centroids):
+        db.upsert_kp_edge(KpEdgeSpec(
+            source_kp=a, target_kp=b,
+            edge_type="related",
+            semantic_weight=cos,
+            combined_strength=cos,
+            confidence=confidence,
+        ))
+        edge_count += 1
 
     # Retrieval edges: from topic_links (Phase 2 behavior)
     topic_links = db.get_topic_links()
     if topic_links:
         qa_to_kp = _build_qa_to_kp_mapping(clusters, qa_list, kp_ids)
-
-        for (src_topic, dst_topic), count in topic_links.items():
-            if count < 2:
-                continue
-            # Map topics to KPs
-            src_kps = set()
-            dst_kps = set()
-            for qa in qa_list:
-                if qa.get("topic") == src_topic and qa["id"] in qa_to_kp:
-                    src_kps.add(qa_to_kp[qa["id"]])
-                if qa.get("topic") == dst_topic and qa["id"] in qa_to_kp:
-                    dst_kps.add(qa_to_kp[qa["id"]])
-            for sk in src_kps:
-                for dk in dst_kps:
-                    if sk != dk:
-                        db.upsert_kp_edge(KpEdgeSpec(
-                            source_kp=dk, target_kp=sk,  # reversed
-                            edge_type="prerequisite",
-                            retrieval_weight=count,
-                            combined_strength=_transition_weight(count),
-                            confidence="medium" if count >= 4 else "low",
-                        ))
-                        edge_count += 1
+        for dk, sk, count in _compute_retrieval_candidates(topic_links, qa_list, qa_to_kp):
+            db.upsert_kp_edge(KpEdgeSpec(
+                source_kp=dk, target_kp=sk,  # reversed
+                edge_type="prerequisite",
+                retrieval_weight=count,
+                combined_strength=_transition_weight(count),
+                confidence="medium" if count >= 4 else "low",
+            ))
+            edge_count += 1
 
     if debug_cb:
         debug_cb(f"  KP edges discovered: {edge_count}")
@@ -414,37 +494,7 @@ def discover_sequential_edges(db: QADatabase, clustering: dict, kp_ids: list[str
     qa_list = clustering["qa_list"]
     clusters = clustering["clusters"]
 
-    qa_to_kp = _build_qa_to_kp_mapping(clusters, qa_list, kp_ids)
-
-    # Natural sort key for question numbers: "1(a)" -> (1, "a"), "10(a)" -> (10, "a")
-    def _qn_sort_key(qn):
-        m = re.match(r'^(\d+)', qn)
-        num = int(m.group(1)) if m else 0
-        suffix = qn[m.end():] if m else qn
-        return (num, suffix)
-
-    # Group QAs by paper, sort by question_number
-    paper_order = {}
-    for qa in qa_list:
-        paper = qa.get("paper", "")
-        qn = qa.get("question_number", "")
-        if paper and qn:
-            paper_order.setdefault(paper, []).append((qn, qa["id"]))
-
-    # Count KP transitions within papers
-    transitions = {}
-    paper_kp_pairs = {}
-    for paper, qas in paper_order.items():
-        qas.sort(key=lambda x: _qn_sort_key(x[0]))  # natural numeric sort
-        seen_kps = []
-        for _, qa_id in qas:
-            kp = qa_to_kp.get(qa_id)
-            if kp and (not seen_kps or seen_kps[-1] != kp):
-                seen_kps.append(kp)
-        for i in range(len(seen_kps) - 1):
-            pair = (seen_kps[i], seen_kps[i + 1])
-            transitions[pair] = transitions.get(pair, 0) + 1
-            paper_kp_pairs.setdefault(pair, set()).add(paper)
+    transitions, paper_kp_pairs = _compute_sequential_transitions(qa_list, clusters, kp_ids)
 
     # Create edges for consistent transitions (>= 3 different papers)
     edge_count = 0
@@ -475,10 +525,7 @@ def discover_learning_path_edges(db: QADatabase, kp_ids: list[str],
         return 0
 
     # Read student trajectories, find KP transitions within sessions
-    rows = db.conn.execute(
-        "SELECT student_id, kp_id, recorded_at FROM student_trajectory "
-        "ORDER BY student_id, recorded_at"
-    ).fetchall()
+    rows = db.student.get_all_trajectories()
 
     if not rows:
         return 0
@@ -559,24 +606,16 @@ def fuse_all_edges(db: QADatabase, kp_ids: list[str], debug_cb=None):
         else:
             etype = "related"
 
-        # Delete all old edges for this (src, tgt) pair before inserting fused edge.
-        # edge_type is part of the PK — if it changes, REPLACE would insert a new row
-        # instead of replacing, creating duplicates.
-        # Use _write_lock for atomic DELETE + INSERT (upsert_kp_edge auto-commits,
-        # which would break an outer BEGIN/COMMIT transaction).
-        with db._write_lock:
-            db.conn.execute(
-                "DELETE FROM kp_edges WHERE source_kp = ? AND target_kp = ?",
-                (src, tgt),
-            )
-            db.conn.execute(
-                """INSERT INTO kp_edges
-                   (source_kp, target_kp, edge_type, retrieval_weight, semantic_weight,
-                    sequential_weight, learning_path_weight, combined_strength, confidence)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (src, tgt, etype, rw, sw, sq, lp, round(combined, 3), confidence),
-            )
-            db._db.maybe_commit()
+        # Atomic DELETE+INSERT via Store — edge_type is part of the PK, so
+        # INSERT OR REPLACE would create duplicates when type changes.
+        db.kp.replace_edge(KpEdgeSpec(
+            source_kp=src, target_kp=tgt,
+            edge_type=etype,
+            retrieval_weight=rw, semantic_weight=sw,
+            sequential_weight=sq, learning_path_weight=lp,
+            combined_strength=round(combined, 3),
+            confidence=confidence,
+        ))
 
     if debug_cb:
         debug_cb(f"  Edge fusion: {len(grouped)} unique pairs from {len(edges)} edges")
@@ -617,17 +656,12 @@ def run_knowledge_graph(db, api_url: str, api_key: str,
         fuse_all_edges(db, kp_ids, _debug)
 
     # Summary: edges by type
-    edge_counts = db.conn.execute(
-        "SELECT edge_type, COUNT(*) as cnt FROM kp_edges GROUP BY edge_type"
-    ).fetchall()
+    edge_counts = db.kp.get_edge_counts()
     edge_str = ", ".join(f"{r['edge_type']}={r['cnt']}" for r in edge_counts)
     _debug(f"  [KG] Edges: {edge_str}" if edge_str else "  [KG] Edges: none")
 
     # Post-fusion duplicate check
-    dup_rows = db.conn.execute(
-        """SELECT source_kp, target_kp, COUNT(*) as cnt
-           FROM kp_edges GROUP BY 1, 2 HAVING COUNT(*) > 1"""
-    ).fetchall()
+    dup_rows = db.kp.get_duplicate_edges()
     if dup_rows:
         duplicates = ", ".join(f"{r['source_kp']}<->{r['target_kp']}(x{r['cnt']})" for r in dup_rows)
         _debug(f"  [KG] Post-fusion duplicate check: {duplicates}")

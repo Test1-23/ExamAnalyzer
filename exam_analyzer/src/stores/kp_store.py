@@ -104,6 +104,33 @@ class KpStore:
             )
             self._mgr.maybe_commit()
 
+    def replace_edge(self, spec: KpEdgeSpec):
+        """Atomically DELETE old edges for (source, target) then INSERT fused edge.
+
+        Used by fuse_all_edges() — standard INSERT OR REPLACE does not work here
+        because edge_type is part of the PK; when the type changes (e.g. from
+        'related' to 'prerequisite'), REPLACE would insert a new row instead of
+        replacing, creating duplicates. This method guarantees exactly one edge
+        per (source_kp, target_kp) pair.
+        """
+        with self._mgr._write_lock:
+            self._mgr._assert_write_locked()
+            self._qb.conn.execute(
+                "DELETE FROM kp_edges WHERE source_kp = ? AND target_kp = ?",
+                (spec.source_kp, spec.target_kp),
+            )
+            self._qb.conn.execute(
+                """INSERT INTO kp_edges
+                   (source_kp, target_kp, edge_type, retrieval_weight,
+                    semantic_weight, sequential_weight, learning_path_weight,
+                    combined_strength, confidence)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (spec.source_kp, spec.target_kp, spec.edge_type, spec.retrieval_weight,
+                 spec.semantic_weight, spec.sequential_weight, spec.learning_path_weight,
+                 spec.combined_strength, spec.confidence),
+            )
+            self._mgr.maybe_commit()
+
     def get_edges(self, kp_id: str = None) -> list[dict]:
         if kp_id:
             rows = self._qb.conn.execute(
@@ -132,6 +159,21 @@ class KpStore:
                     {"kp": t, "type": r["edge_type"], "confidence": r["confidence"]}
                 )
         return graph
+
+    def get_edge_counts(self) -> list[dict]:
+        """Return edge counts grouped by edge_type for diagnostics."""
+        rows = self._qb.conn.execute(
+            "SELECT edge_type, COUNT(*) as cnt FROM kp_edges GROUP BY edge_type"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_duplicate_edges(self) -> list[dict]:
+        """Return (source_kp, target_kp) pairs with multiple edges (post-fusion check)."""
+        rows = self._qb.conn.execute(
+            "SELECT source_kp, target_kp, COUNT(*) as cnt "
+            "FROM kp_edges GROUP BY 1, 2 HAVING COUNT(*) > 1"
+        ).fetchall()
+        return [dict(r) for r in rows]
 
     # -- QA-KP Membership --
 
