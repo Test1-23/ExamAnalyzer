@@ -22,7 +22,7 @@ from .offline import run_offline_analysis
 from .pdf_extractor import extract_pdf
 from .diagnostics import run_closed_loop, run_cross_paper_check
 from .embedding_cluster import detect_content_lang
-from .prompt_factory import FRAGMENT, QA_CLASSIFY
+from .prompt_factory import FRAGMENT, QA_CLASSIFY, PromptType, PromptBuilder
 from .topic_merger import merge_similar_topics
 from .reviewer import review_distilled
 from .evolution import run_evolution_cycle
