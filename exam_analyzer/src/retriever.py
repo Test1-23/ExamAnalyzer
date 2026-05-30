@@ -1,8 +1,13 @@
 """QARetriever -- embedding-based similarity search over the QA database."""
 
+from __future__ import annotations
+
 import threading
 import numpy as np
-from typing import List, Optional
+from typing import TYPE_CHECKING, List, Optional
+
+if TYPE_CHECKING:
+    from .knowledge_base import QADatabase
 
 from .embedding_cluster import _get_model, MODEL_MAP, _detect_language
 from .logger import get_logger
