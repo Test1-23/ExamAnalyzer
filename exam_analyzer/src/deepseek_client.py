@@ -141,7 +141,11 @@ def _call_with_retry(
         log(f"  {model} attempting simplified prompt fallback...")
         try:
             simplified = [{"role": "system", "content": "Answer concisely."}]
-            simplified.append({"role": "user", "content": messages[-1]["content"][:2000] if messages[-1]["role"] == "user" else str(messages[-1])})
+            # Use the last message's content regardless of role (fallback).
+            # If not a dict with "content", use str representation as last resort.
+            last = messages[-1]
+            last_content = last.get("content", "") if isinstance(last, dict) else str(last)
+            simplified.append({"role": "user", "content": str(last_content)[:2000]})
             raw = _attempt_call(client, model, simplified, response_format=None)
             result = _extract_json(raw)
             _log.info(f"API retry OK: model={model}, mode=simplified_fallback, attempts={total_attempts + 1}")
