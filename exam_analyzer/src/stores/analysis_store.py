@@ -268,3 +268,94 @@ class AnalysisStore:
                 "topic": dep, "type": r["relationship_type"], "confidence": r["confidence"]
             })
         return graph
+
+    def get_direct_prerequisites(self, topic: str) -> list[dict]:
+        """Return direct prerequisites of a topic from topic_dependencies."""
+        rows = self._qb.conn.execute(
+            "SELECT prerequisite, evidence_score, confidence, relationship_type "
+            "FROM topic_dependencies WHERE dependent = ?",
+            (topic,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_transitive_prerequisites(self, topic: str, max_depth: int = 5) -> list[str]:
+        """BFS to find all transitive prerequisites of a topic.
+
+        Traverses topic_dependencies up to max_depth levels.
+        Returns deduplicated list of prerequisite topic names.
+        """
+        seen = set()
+        frontier = [topic]
+        for _ in range(max_depth):
+            if not frontier:
+                break
+            next_frontier = []
+            for t in frontier:
+                rows = self._qb.conn.execute(
+                    "SELECT prerequisite FROM topic_dependencies WHERE dependent = ?",
+                    (t,),
+                ).fetchall()
+                for r in rows:
+                    pre = r["prerequisite"]
+                    if pre not in seen:
+                        seen.add(pre)
+                        next_frontier.append(pre)
+            frontier = next_frontier
+        return list(seen)
+
+    # -- Paper Signatures (cross-paper diagnostics) --
+
+    def upsert_paper_signature(self, display_name: str, qa_count: int,
+                                topic_count: int, verb_dist: str = "",
+                                difficulty_dist: str = "",
+                                avg_miss_rate: float = None,
+                                avg_answer_length: float = None,
+                                topic_purity_avg: float = None):
+        with self._mgr._write_lock:
+            self._mgr._assert_write_locked()
+            self._qb.conn.execute(
+                """INSERT OR REPLACE INTO paper_signatures
+                   (display_name, qa_count, topic_count, verb_dist, difficulty_dist,
+                    avg_miss_rate, avg_answer_length, topic_purity_avg, anomaly_flags)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (display_name, qa_count, topic_count, verb_dist, difficulty_dist,
+                 avg_miss_rate, avg_answer_length, topic_purity_avg, ""),
+            )
+            self._mgr.maybe_commit()
+
+    def get_paper_signature(self, display_name: str) -> dict | None:
+        row = self._qb.conn.execute(
+            "SELECT * FROM paper_signatures WHERE display_name = ?", (display_name,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    def get_paper_signatures(self) -> list[dict]:
+        rows = self._qb.get_all("paper_signatures")
+        return [dict(r) for r in rows]
+
+    def update_paper_anomaly_flags(self, display_name: str, flags: str):
+        with self._mgr._write_lock:
+            self._mgr._assert_write_locked()
+            self._qb.conn.execute(
+                "UPDATE paper_signatures SET anomaly_flags = ? WHERE display_name = ?",
+                (flags, display_name),
+            )
+            self._mgr.maybe_commit()
+
+    # -- Dimension Baselines (cross-paper diagnostics) --
+
+    def upsert_dimension_baseline(self, dimension: str, mean: float,
+                                   median: float, mad: float, sample_count: int):
+        with self._mgr._write_lock:
+            self._mgr._assert_write_locked()
+            self._qb.conn.execute(
+                """INSERT OR REPLACE INTO dimension_baselines
+                   (dimension, mean, median, mad, sample_count, last_updated)
+                   VALUES (?, ?, ?, ?, ?, datetime('now'))""",
+                (dimension, mean, median, mad, sample_count),
+            )
+            self._mgr.maybe_commit()
+
+    def get_dimension_baselines(self) -> list[dict]:
+        rows = self._qb.get_all("dimension_baselines")
+        return [dict(r) for r in rows]

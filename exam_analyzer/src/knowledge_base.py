@@ -187,14 +187,7 @@ class QADatabase:
 
     def get_topic_helped_questions(self, topic_id: str) -> set:
         """Return the set of QA IDs that this topic's fragments helped."""
-        rows = self.conn.execute(
-            """SELECT DISTINCT fhm.helped_qa_id
-               FROM fragment_help_map fhm
-               JOIN fragment_membership fm ON fhm.fragment_id = fm.fragment_id
-               WHERE fm.topic_id = ?""",
-            (topic_id,),
-        ).fetchall()
-        return {r["helped_qa_id"] for r in rows}
+        return self.fragment.get_topic_helped_questions(topic_id)
 
     # ============================================================
     # Phase 5: Fragment centrality + vector infrastructure
@@ -294,33 +287,11 @@ class QADatabase:
         return self.analysis.get_dependency_graph()
 
     def get_direct_prerequisites(self, topic: str) -> list[dict]:
-        rows = self.conn.execute(
-            """SELECT prerequisite, evidence_score, confidence, relationship_type
-               FROM topic_dependencies WHERE dependent = ?""",
-            (topic,),
-        ).fetchall()
-        return [dict(r) for r in rows]
+        return self.analysis.get_direct_prerequisites(topic)
 
     def get_transitive_prerequisites(self, topic: str, max_depth: int = 5) -> list[str]:
         """BFS to find all transitive prerequisites of a topic."""
-        seen = set()
-        frontier = [topic]
-        for _ in range(max_depth):
-            if not frontier:
-                break
-            next_frontier = []
-            for t in frontier:
-                rows = self.conn.execute(
-                    "SELECT prerequisite FROM topic_dependencies WHERE dependent = ?",
-                    (t,),
-                ).fetchall()
-                for r in rows:
-                    pre = r["prerequisite"]
-                    if pre not in seen:
-                        seen.add(pre)
-                        next_frontier.append(pre)
-            frontier = next_frontier
-        return list(seen)
+        return self.analysis.get_transitive_prerequisites(topic, max_depth)
 
     # ---- Command verb patterns ----
 

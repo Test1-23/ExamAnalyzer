@@ -101,37 +101,29 @@ def compute_paper_signature(db: QADatabase, display_name: str = None) -> dict:
 def update_baselines(db: QADatabase):
     """Update dimension baselines (median + MAD) from all paper_signatures."""
     dimensions = ["qa_count", "topic_count", "avg_miss_rate", "avg_answer_length"]
+    papers = db.analysis.get_paper_signatures()
     sample_counts = []
-    with db._write_lock:
-        for dim in dimensions:
-            rows = db.conn.execute(
-                f"SELECT {dim} FROM paper_signatures WHERE {dim} IS NOT NULL"
-            ).fetchall()
-            values = [r[dim] for r in rows if r[dim] is not None]
-            sample_counts.append(len(values))
-            if len(values) < 3:
-                continue
-            med = statistics.median(values)
-            mad = statistics.median([abs(v - med) for v in values])
-            db.conn.execute(
-                """INSERT OR REPLACE INTO dimension_baselines
-                   (dimension, mean, median, mad, sample_count, last_updated)
-                   VALUES (?, ?, ?, ?, ?, datetime('now'))""",
-                (dim, sum(values) / len(values), med, mad, len(values)),
-            )
-        db._commit()
+    for dim in dimensions:
+        values = [p[dim] for p in papers if p.get(dim) is not None]
+        sample_counts.append(len(values))
+        if len(values) < 3:
+            continue
+        med = statistics.median(values)
+        mad = statistics.median([abs(v - med) for v in values])
+        db.analysis.upsert_dimension_baseline(
+            dimension=dim, mean=sum(values) / len(values),
+            median=med, mad=mad, sample_count=len(values),
+        )
     _log.info(f"Baselines updated: {len(dimensions)} dimensions, "
               f"sample counts: {dict(zip(dimensions, sample_counts))}")
 
 
 def detect_anomalies(db: QADatabase, display_name: str) -> list[str]:
     """Detect anomalies for a paper by comparing against dimension baselines."""
-    sig_rows = db.conn.execute(
-        "SELECT * FROM paper_signatures WHERE display_name = ?", (display_name,)
-    ).fetchone()
+    sig_rows = db.analysis.get_paper_signature(display_name)
     if not sig_rows:
         return []
-    base_rows = db.conn.execute("SELECT * FROM dimension_baselines").fetchall()
+    base_rows = db.analysis.get_dimension_baselines()
     baselines = {r["dimension"]: dict(r) for r in base_rows}
     anomalies = []
     dimensions = ["qa_count", "topic_count", "avg_miss_rate"]
@@ -280,26 +272,19 @@ def run_cross_paper_check(db, display_name: str = None, debug_callback=None):
         return
     sig = compute_paper_signature(db, display_name)
     if display_name and sig["qa_count"] > 0:
-        with db.transaction():
-            db.conn.execute(
-                """INSERT OR REPLACE INTO paper_signatures
-                   (display_name, qa_count, topic_count, verb_dist, difficulty_dist,
-                    avg_miss_rate, avg_answer_length, topic_purity_avg, anomaly_flags)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (display_name, sig["qa_count"], sig["topic_count"],
-                 sig["verb_dist"], sig["difficulty_dist"],
-                 sig["avg_miss_rate"], sig["avg_answer_length"],
-                 sig["topic_purity_avg"], ""),
-            )
+        db.analysis.upsert_paper_signature(
+            display_name=display_name, qa_count=sig["qa_count"],
+            topic_count=sig["topic_count"], verb_dist=sig.get("verb_dist", ""),
+            difficulty_dist=sig.get("difficulty_dist", ""),
+            avg_miss_rate=sig["avg_miss_rate"],
+            avg_answer_length=sig["avg_answer_length"],
+            topic_purity_avg=sig["topic_purity_avg"],
+        )
     update_baselines(db)
     if display_name:
         anomalies = detect_anomalies(db, display_name)
         if anomalies:
-            with db.transaction():
-                db.conn.execute(
-                    "UPDATE paper_signatures SET anomaly_flags = ? WHERE display_name = ?",
-                    (json.dumps(anomalies), display_name),
-                )
+            db.analysis.update_paper_anomaly_flags(display_name, json.dumps(anomalies))
             for a in anomalies:
                 _debug(f"ANOMALY: {a}")
         else:

@@ -109,3 +109,18 @@ class FragmentStore:
                WHERE fm.topic_id = ?""", (topic_id,)
         ).fetchall()
         return [dict(r) for r in rows]
+
+    def get_topic_helped_questions(self, topic_id: str) -> set[int]:
+        """Return the set of QA IDs that this topic's fragments helped.
+
+        Cross-table JOIN: fragment_help_map ⋈ fragment_membership.
+        Used by cascade and migration diagnostics for topic overlap analysis.
+        """
+        rows = self._qb.conn.execute(
+            "SELECT DISTINCT fhm.helped_qa_id "
+            "FROM fragment_help_map fhm "
+            "JOIN fragment_membership fm ON fhm.fragment_id = fm.fragment_id "
+            "WHERE fm.topic_id = ?",
+            (topic_id,),
+        ).fetchall()
+        return {r["helped_qa_id"] for r in rows}
