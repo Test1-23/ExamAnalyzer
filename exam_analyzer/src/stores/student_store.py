@@ -63,6 +63,11 @@ class StudentStore:
                            from_state=from_state, to_state=to_state,
                            trigger=trigger)
 
+    def get_trajectory(self, student_id: str, limit: int = 20) -> list[dict]:
+        """Return trajectory records for a specific student."""
+        return self._qb.get_where("student_trajectory", student_id=student_id,
+                                  order_by="recorded_at DESC", limit=limit)
+
     def get_all_trajectories(self) -> list[dict]:
         """Return all student trajectories ordered by student_id, recorded_at.
 

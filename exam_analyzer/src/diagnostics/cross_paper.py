@@ -102,23 +102,24 @@ def update_baselines(db: QADatabase):
     """Update dimension baselines (median + MAD) from all paper_signatures."""
     dimensions = ["qa_count", "topic_count", "avg_miss_rate", "avg_answer_length"]
     sample_counts = []
-    for dim in dimensions:
-        rows = db.conn.execute(
-            f"SELECT {dim} FROM paper_signatures WHERE {dim} IS NOT NULL"
-        ).fetchall()
-        values = [r[dim] for r in rows if r[dim] is not None]
-        sample_counts.append(len(values))
-        if len(values) < 3:
-            continue
-        med = statistics.median(values)
-        mad = statistics.median([abs(v - med) for v in values])
-        db.conn.execute(
-            """INSERT OR REPLACE INTO dimension_baselines
-               (dimension, mean, median, mad, sample_count, last_updated)
-               VALUES (?, ?, ?, ?, ?, datetime('now'))""",
-            (dim, sum(values) / len(values), med, mad, len(values)),
-        )
-    db._db.maybe_commit()
+    with db._write_lock:
+        for dim in dimensions:
+            rows = db.conn.execute(
+                f"SELECT {dim} FROM paper_signatures WHERE {dim} IS NOT NULL"
+            ).fetchall()
+            values = [r[dim] for r in rows if r[dim] is not None]
+            sample_counts.append(len(values))
+            if len(values) < 3:
+                continue
+            med = statistics.median(values)
+            mad = statistics.median([abs(v - med) for v in values])
+            db.conn.execute(
+                """INSERT OR REPLACE INTO dimension_baselines
+                   (dimension, mean, median, mad, sample_count, last_updated)
+                   VALUES (?, ?, ?, ?, ?, datetime('now'))""",
+                (dim, sum(values) / len(values), med, mad, len(values)),
+            )
+        db._commit()
     _log.info(f"Baselines updated: {len(dimensions)} dimensions, "
               f"sample counts: {dict(zip(dimensions, sample_counts))}")
 
