@@ -22,6 +22,7 @@ __pycache__/
 # --- exam_analyzer ---
 exam_analyzer/config.json
 exam_analyzer/logs/
+
 exam_analyzer/intermediate/
 exam_analyzer/point/
 exam_analyzer/TestReport/
@@ -36,12 +37,10 @@ exam_analyzer/tests/test_reachability.py
 # Generated analysis reports
 exam_analyzer/分析报告*.md
 
+# files for agents to exchange information
+AgentChatRoom/
+
 # Root-level generated files
 intermediate/
 logs/
 
-# Project planning docs (local only)
-require.md
-feedback.md
-concern.md
-review.md
