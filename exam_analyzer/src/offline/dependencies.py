@@ -79,8 +79,8 @@ def discover_dependencies(db: QADatabase, client, debug_cb, progress_cb=None) ->
 
 def _phase0_generate_candidates(db, debug_cb):
     """Generate candidate dependency pairs from topic_links and embedding similarity."""
-    topic_links = db.get_topic_links()
-    topic_texts = db.get_topic_answer_texts()
+    topic_links = db.topic.get_links()
+    topic_texts = db.qa.get_topic_answer_texts()
     topics = list(topic_texts.keys())
 
     if len(topics) < 2:
@@ -140,7 +140,7 @@ def _phase0_generate_candidates(db, debug_cb):
 
 def _phase1_validate_candidates(db, candidates, client, debug_cb):
     """Batch Flash validation of dependency candidates (5 pairs per call). Parallelized."""
-    topic_texts = db.get_topic_answer_texts()
+    topic_texts = db.qa.get_topic_answer_texts()
     batch_size = 5
 
     sorted_candidates = sorted(candidates, key=lambda c: (
@@ -261,7 +261,7 @@ def _phase2_postprocess_dependencies(db, validated, debug_cb):
         if (pre, dep) in redundant:
             debug_cb(f"  Transitive reduction: removed {pre}→{dep}")
             continue
-        db.insert_dependency(DependencySpec(
+        db.analysis.insert_dependency(DependencySpec(
             prerequisite=pre, dependent=dep,
             evidence_score=v["score"],
             evidence_reason=v.get("reason", ""),

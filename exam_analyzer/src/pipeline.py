@@ -83,7 +83,7 @@ def _record_fragment_help(used_ids: set, covered: list, missed_texts: list,
             help_level = "direct" if help_effect >= HELP_DIRECT_THRESHOLD else (
                 "understanding" if help_effect >= HELP_UNDERSTANDING_THRESHOLD else "none")
             for fid in frag_ids:
-                db.record_fragment_help_with_level(
+                db.fragment.record_help_with_level(
                     fid, qa_id, round(help_effect, 3), help_level)
 
 
@@ -146,7 +146,7 @@ def _place_qa_vector_from_kp_scores(db: QADatabase, qa_id: int,
     # Store QA-KP relevance scores
     for kp_id, score in kp_scores.items():
         if score >= 0.3:
-            db.upsert_qa_kp_score(qa_id, kp_id, round(score, 3))
+            db.vector.upsert_qa_kp_score(qa_id, kp_id, round(score, 3))
 
     # Determine initial Topic and centrality
     best_kp = max(kp_scores, key=kp_scores.get)
@@ -162,7 +162,7 @@ def _place_qa_vector_from_kp_scores(db: QADatabase, qa_id: int,
 
     # Update QA's topic and centrality
     if topic:
-        db.update_qa_topic(qa_id, topic)
+        db.qa.update_topic(qa_id, topic)
     else:
         return
 
@@ -171,7 +171,7 @@ def _place_qa_vector_from_kp_scores(db: QADatabase, qa_id: int,
         "SELECT point_id FROM ms_fragments WHERE qa_id=?", (qa_id,)
     ).fetchall()
     for fr in frag_rows:
-        db.upsert_fragment_centrality(fr["point_id"], centrality, best_score, 0.5, 0.0)
+        db.fragment.upsert_centrality(fr["point_id"], centrality, best_score, 0.5, 0.0)
 
     debug(f"  QA {qa_id}: Topic='{topic}', centrality={centrality}, best_kp={best_kp}({best_score})")
 
@@ -255,11 +255,11 @@ def _ensure_session(db, display_name: str) -> Optional[int]:
 
 def _run_kp_refinement(db, client, debug):
     """KP structural refinement: auto-split + auto-merge (behavior-driven)."""
-    kps = db.get_all_kps()
+    kps = db.kp.get_all()
     for kp in kps:
         if kp.get("evidence_count", 0) >= 6:
             auto_split_kp(db, kp["id"], client, debug_cb=debug)
-    kps = db.get_all_kps()
+    kps = db.kp.get_all()
     all_kp_ids = [k["id"] for k in kps]
     if len(all_kp_ids) >= 2:
         consistency = cross_kp_consistency(db, all_kp_ids[:30], client, debug_cb=debug)
@@ -459,7 +459,7 @@ def _step_fragment_and_kp(qa, qa_id, topic, used_ids, covered,
                     frag["point_id"], topic_id, loyalty=0.5)
 
         # Layer 1: LLM KP classification (only when KPs exist)
-        kps = ctx.db.get_all_kps()
+        kps = ctx.db.kp.get_all()
         if kps:
             kp_concepts = [{
                 "id": k["id"],
@@ -585,7 +585,7 @@ def run_pipeline(
 
     client = create_client(api_url, api_key)
     is_first = (db.count() == 0)
-    topic_links = db.get_topic_links()
+    topic_links = db.topic.get_links()
 
     tracker = ProgressTracker(len(pairs) * 70 + 10, _progress, _log)
 
@@ -654,7 +654,7 @@ def run_pipeline(
             _debug(f"[{display_name}] Phase2: parallel test-learn ({len(qa_pairs)} questions)")
 
             # Pre-load QA weights + existing topics for retrieval-augmented summary
-            weight_map = db.get_all_weights()
+            weight_map = db.qa.get_all_weights()
             existing_topics = _get_existing_topics(db) if db.count() > 0 else None
 
             ctx = PipelineContext(client=client, db=db, debug=_debug,
@@ -672,7 +672,7 @@ def run_pipeline(
                         qa_id, summary, cross_refs = future.result()
                         qa_results.append((qa_id, summary))
                         for (src, dst), count in cross_refs.items():
-                            db.upsert_topic_link(src, dst, count)
+                            db.topic.upsert_link(src, dst, count)
                             topic_links[(src, dst)] = topic_links.get((src, dst), 0) + count
                     except Exception as e:
                         qa = futures[future]
@@ -801,7 +801,7 @@ def run_pipeline(
     # Mark representative and cross-topic QAs
     # Re-fetch groups after topic merge may have modified topic assignments
     groups = db.get_topic_groups()
-    weights = db.get_all_weights()
+    weights = db.qa.get_all_weights()
     with db.transaction():
         for topic, qas in groups.items():
             if not topic or topic == "(uncategorized)" or not qas:

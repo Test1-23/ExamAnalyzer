@@ -328,7 +328,7 @@ def generate_kps(db: QADatabase, clustering: dict, client, debug_cb=None) -> lis
 
                 # Store KP
                 centroid_bytes = centroid.tobytes() if centroid is not None else None
-                db.upsert_kp(KPSpec(
+                db.kp.upsert(KPSpec(
                     kp_id=kp_id, name=name, description=description,
                     cluster_id=cluster_idx, centroid_vector=centroid_bytes,
                     cohesion=cohesions[cluster_idx],
@@ -338,7 +338,7 @@ def generate_kps(db: QADatabase, clustering: dict, client, debug_cb=None) -> lis
 
                 # Store QA-KP membership
                 for qa_idx, dist in qa_dists:
-                    db.set_qa_kp_membership(
+                    db.kp.set_membership(
                         qa_id=qa_list[qa_idx]["id"],
                         kp_id=kp_id,
                         membership_strength=round(dist, 3),
@@ -375,11 +375,11 @@ def _compute_retrieval_candidates(topic_links: dict, qa_list: list[dict],
     """Compute retrieval edge candidates from topic link counts.
 
     Pure function — zero DB interaction. Accepts topic_links dict (from
-    db.get_topic_links()), QA list, and QA→KP mapping. Returns list of
+    db.topic.get_links()), QA list, and QA→KP mapping. Returns list of
     (target_kp, source_kp, count) tuples for topic pairs with count >= 2.
     Direction is reversed: dst_topic→source_kp, src_topic→target_kp.
 
-    Caller is responsible for creating KpEdgeSpec and calling db.upsert_kp_edge().
+    Caller is responsible for creating KpEdgeSpec and calling db.kp.upsert_edge().
     """
     candidates = []
     for (src_topic, dst_topic), count in topic_links.items():
@@ -455,7 +455,7 @@ def discover_kp_edges(db: QADatabase, clustering: dict, kp_ids: list[str],
     # Semantic edges: cosine between KP centroids (computation extracted)
     edge_count = 0
     for a, b, cos, confidence in _compute_semantic_edges(kp_centroids):
-        db.upsert_kp_edge(KpEdgeSpec(
+        db.kp.upsert_edge(KpEdgeSpec(
             source_kp=a, target_kp=b,
             edge_type="related",
             semantic_weight=cos,
@@ -465,11 +465,11 @@ def discover_kp_edges(db: QADatabase, clustering: dict, kp_ids: list[str],
         edge_count += 1
 
     # Retrieval edges: from topic_links (Phase 2 behavior)
-    topic_links = db.get_topic_links()
+    topic_links = db.topic.get_links()
     if topic_links:
         qa_to_kp = _build_qa_to_kp_mapping(clusters, qa_list, kp_ids)
         for dk, sk, count in _compute_retrieval_candidates(topic_links, qa_list, qa_to_kp):
-            db.upsert_kp_edge(KpEdgeSpec(
+            db.kp.upsert_edge(KpEdgeSpec(
                 source_kp=dk, target_kp=sk,  # reversed
                 edge_type="prerequisite",
                 retrieval_weight=count,
@@ -502,7 +502,7 @@ def discover_sequential_edges(db: QADatabase, clustering: dict, kp_ids: list[str
         # 时序边: ≥3 场不同考试支持才建立 sequential 边
         num_papers = len(paper_kp_pairs.get((a, b), set()))
         if num_papers >= 3 and a != b:
-            db.upsert_kp_edge(KpEdgeSpec(
+            db.kp.upsert_edge(KpEdgeSpec(
                 source_kp=a, target_kp=b,
                 edge_type="sequential",
                 sequential_weight=_transition_weight(num_papers),
@@ -550,7 +550,7 @@ def discover_learning_path_edges(db: QADatabase, kp_ids: list[str],
     for (a, b), count in transitions.items():
         num_students = len(student_pairs.get((a, b), set()))
         if num_students >= 3 and a != b:
-            db.upsert_kp_edge(KpEdgeSpec(
+            db.kp.upsert_edge(KpEdgeSpec(
                 source_kp=a, target_kp=b,
                 edge_type="learning_path",
                 learning_path_weight=_transition_weight(num_students),
@@ -568,7 +568,7 @@ def discover_learning_path_edges(db: QADatabase, kp_ids: list[str],
 def fuse_all_edges(db: QADatabase, kp_ids: list[str], debug_cb=None):
     """Merge multi-signal edges: if an edge has supporting evidence from multiple sources,
     upgrade its confidence and compute combined strength."""
-    edges = db.get_kp_edges()
+    edges = db.kp.get_edges()
     if not edges:
         return
 
@@ -669,6 +669,6 @@ def run_knowledge_graph(db, api_url: str, api_key: str,
         _debug("  [KG] Post-fusion duplicate check: clean (0 duplicates)")
 
     _debug(f"Knowledge graph: {len(kp_ids)} KPs from {len(clustering['clusters'])} clusters")
-    db.checkpoint("knowledge_graph", db.count(), "completed")
+    db.analysis.checkpoint("knowledge_graph", db.count(), "completed")
 
     _debug("Knowledge graph construction complete")

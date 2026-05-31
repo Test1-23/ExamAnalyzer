@@ -94,7 +94,7 @@ def assess_difficulty(db: QADatabase, client, verb_data: dict, debug_cb, progres
 def _phase1_difficulty_benchmark(db, qas, client, debug_cb):
     """Flash rates ~30 representative QAs to establish difficulty baseline."""
     # Pick representative QAs: is_representative first, then highest Beta weight
-    weights = db.get_all_weights()
+    weights = db.qa.get_all_weights()
     # Select 1 QA per topic (highest weight), then sample up to 30
     groups = db.get_topic_groups()
     candidates = []
@@ -153,7 +153,7 @@ def _phase2_calibrate_signals(db, qas, anchors, anchor_labels, verb_data, debug_
     def _compute_effective_miss_rate(qa):
         """Only knowledge_gap + insufficient_detail contribute to difficulty.
         misinterpretation and retrieval_quality are excluded."""
-        return db.get_effective_miss_rate(qa["id"])
+        return db.qa.get_effective_miss_rate(qa["id"])
 
     def _compute_cross_topic_degree(qa):
         topic = qa.get("topic", "")
@@ -221,7 +221,7 @@ def _get_signal(qa, signal_name, db, all_qas):
     all_qas: pre-loaded list of all QAs (avoids repeated db.get_all() calls).
     """
     if signal_name == "effective_miss_rate":
-        return db.get_effective_miss_rate(qa["id"])
+        return db.qa.get_effective_miss_rate(qa["id"])
     elif signal_name == "cross_topic":
         topic = qa.get("topic", "")
         if not topic:

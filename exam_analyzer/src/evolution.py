@@ -59,7 +59,7 @@ def run_evolution_cycle(db: QADatabase, client, debug) -> None:
                 try:
                     result = future.result()
                     new_quality = result.get("quality", "unknown")
-                    db.record_evolution(
+                    db.analysis.record_evolution(
                         kp_id=kp_id,
                         trigger_type="auto_re-review",
                         trigger_detail="disputed KP re-evaluated in evolution cycle",
@@ -82,7 +82,7 @@ def run_evolution_cycle(db: QADatabase, client, debug) -> None:
             if current_members > prev_evidence and current_members >= 5:
                 growth = current_members - prev_evidence
                 if growth >= 3 or current_members >= prev_evidence * 1.5:
-                    db.record_evolution(
+                    db.analysis.record_evolution(
                         kp_id=kp["id"],
                         trigger_type="evidence_growth",
                         trigger_detail=f"QA members: {prev_evidence} -> {current_members} (+{growth})",
@@ -96,7 +96,7 @@ def run_evolution_cycle(db: QADatabase, client, debug) -> None:
                             (current_members, kp["id"]),
                         )
 
-    pending_count = len(db.get_pending_evolutions())
+    pending_count = len(db.analysis.get_pending_evolutions())
     if pending_count:
         debug(f"Evolution: {pending_count} improvement proposals queued")
 
@@ -127,7 +127,7 @@ def _generate_kp_for_stable_topics(db: QADatabase, client, debug) -> None:
 
     for topic in topics:
         topic_id = topic["topic_id"]
-        frags = db.get_topic_fragments(topic_id)
+        frags = db.topic.get_fragments(topic_id)
         if not frags:
             continue
 
@@ -167,7 +167,7 @@ def _generate_kp_for_stable_topics(db: QADatabase, client, debug) -> None:
             concept = topic["name"] + "[auto]"
             detail = ""
 
-        db.set_topic_kp(topic_id, concept, detail)
+        db.topic.set_kp(topic_id, concept, detail)
         debug(f"  KP generated: [{topic_id}] {concept[:80]}")
 
 

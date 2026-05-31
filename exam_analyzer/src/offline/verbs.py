@@ -285,7 +285,7 @@ def _phase3_summarize_patterns(verb_groups, verb_stats, db, client, debug_cb):
                                 f"than typical for '{verb}' questions ({avg_len:.0f} vs {mean_val:.0f} chars)."
                             )
 
-        db.upsert_verb_pattern(VerbPatternSpec(
+        db.analysis.upsert_verb_pattern(VerbPatternSpec(
             verb=verb, sample_count=stat["sample_count"],
             avg_answer_length=stat["avg_answer_length"],
             median_answer_length=stat["median_answer_length"],
