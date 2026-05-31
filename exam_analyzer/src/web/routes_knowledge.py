@@ -71,8 +71,8 @@ def knowledge_graph():
         return jsonify({"error": "no_data", "message": "Analyze exam papers first"}), 400
 
     db = retriever.db
-    graph = db.get_dependency_graph()
-    difficulties = {d["topic"]: d for d in db.get_topic_difficulty()}
+    graph = db.analysis.get_dependency_graph()
+    difficulties = {d["topic"]: d for d in db.topic.get_difficulty()}
 
     nodes = []
     added = set()
@@ -145,5 +145,5 @@ def topic_difficulty_api():
     if retriever is None:
         return jsonify({"error": "no_data", "message": "Analyze exam papers first"}), 400
     topic = request.args.get("topic", "")
-    difficulties = retriever.db.get_topic_difficulty(topic if topic else None)
+    difficulties = retriever.db.topic.get_difficulty(topic if topic else None)
     return jsonify({"difficulties": difficulties})

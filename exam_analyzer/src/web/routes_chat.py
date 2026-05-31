@@ -33,7 +33,7 @@ def chat_history_endpoint():
     if request.method == "DELETE":
         retriever.clear_chat_history(session_id)
         return jsonify({"success": True})
-    history = retriever.db.get_chat_history(session_id)
+    history = retriever.db.chat.get_history(session_id)
     return jsonify({"history": history})
 
 
@@ -64,7 +64,7 @@ def chat():
 
     history = []
     try:
-        history = retriever.db.get_chat_history(session_id)
+        history = retriever.db.chat.get_history(session_id)
     except Exception:
         _log.debug("Failed to load chat history", exc_info=True)
 
@@ -139,18 +139,18 @@ def chat():
                                 db=retriever.db, session_id=session_id)
 
     try:
-        retriever.db.save_chat_message(session_id, "user", question, "")
-        retriever.db.save_chat_message(session_id, "assistant", answer_text,
+        retriever.db.chat.save_message(session_id, "user", question, "")
+        retriever.db.chat.save_message(session_id, "assistant", answer_text,
                                         json.dumps([{"topic": qa.get("topic", ""), "question": qa.get("question_text", "")[:120]} for qa in relevant[:3]]))
         for qa in relevant[:2]:
             topic = qa.get("topic", "")
             if topic:
-                retriever.db.save_student_memory(session_id, "question", topic, question[:500])
-                retriever.db.upsert_knowledge_state(session_id, topic, "learning")
+                retriever.db.student.save_memory(session_id, "question", topic, question[:500])
+                retriever.db.student.upsert_knowledge_state(session_id, topic, "learning")
                 try:
                     kp_ids = retriever.db.kp.get_kp_ids_for_qa(qa["id"])
                     for kp_id in kp_ids:
-                        retriever.db.record_trajectory(session_id, kp_id, "new", "learning", "chat_question")
+                        retriever.db.student.record_trajectory(session_id, kp_id, "new", "learning", "chat_question")
                 except Exception:
                     _log.debug("Failed to record trajectory", exc_info=True)
     except Exception:
@@ -180,7 +180,7 @@ def exam_stats():
     retriever = state.get_chat_retriever()
     if retriever is None:
         return jsonify({"error": "知识库未就绪"}), 400
-    stats = retriever.db.get_exam_stats(topic)
+    stats = retriever.db.analysis.get_exam_stats(topic)
     return jsonify({"topic": topic, "stats": stats})
 
 
@@ -190,7 +190,7 @@ def student_state():
     retriever = state.get_chat_retriever()
     if retriever is None:
         return jsonify({"state": {}})
-    return jsonify({"state": retriever.db.get_knowledge_state(sid)})
+    return jsonify({"state": retriever.db.student.get_knowledge_state(sid)})
 
 
 @chat_bp.route("/api/chat/student-confusions")
@@ -199,7 +199,7 @@ def student_confusions():
     retriever = state.get_chat_retriever()
     if retriever is None:
         return jsonify({"confusions": []})
-    confusions = retriever.db.get_student_confusions(sid)
+    confusions = retriever.db.student.get_confusions(sid)
     topic = request.args.get("topic", "")
     if topic:
         confusions = [c for c in confusions if c["topic"] == topic]
