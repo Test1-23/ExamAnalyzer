@@ -54,8 +54,8 @@ def extract_template(db: QADatabase, kp_id: str, client, debug_cb=None) -> dict:
         result = call_flash(client, messages, max_retries=1, debug_callback=debug_cb)
         return result if isinstance(result, dict) else {}
     except Exception as e:
-        if debug_cb:
-            debug_cb(f"  Template extraction failed for {kp_id}: {e}")
+        from .error_utils import log_exception
+        log_exception(debug_cb, "Template extraction", f"kp={kp_id}", e)
         return {}
 
 
@@ -147,8 +147,8 @@ def generate_answer(question: str, kp_id: str, db: QADatabase, client, debug_cb=
         result = call_flash(client, messages, max_retries=1, debug_callback=debug_cb)
         answer = result.get("answer", "") if isinstance(result, dict) else str(result)
     except Exception as e:
-        if debug_cb:
-            debug_cb(f"  Answer generation failed: {e}")
+        from .error_utils import log_exception
+        log_exception(debug_cb, "Answer generation", "", e)
         return {"answer": "", "validated": False}
 
     # Validate: compare generated answer to a representative markscheme using scoring pattern
@@ -168,7 +168,8 @@ def generate_answer(question: str, kp_id: str, db: QADatabase, client, debug_cb=
         ], max_retries=1, debug_callback=debug_cb)
         val_result = val_result if isinstance(val_result, dict) else {}
     except Exception as e:
-        if debug_cb: debug_cb(f"Answer validation API failed: {e}")
+        from .error_utils import log_exception
+        log_exception(debug_cb, "Answer validation", "", e)
         val_result = {}
 
     covered = len(val_result.get("covered_points", []))

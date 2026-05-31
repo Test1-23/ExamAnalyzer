@@ -42,7 +42,8 @@ def review_distilled(content: str, client, topic_links: dict, topic_related: dic
         if isinstance(result, dict) and result.get("content"):
             reviewed = result["content"]
     except Exception as e:
-        debug(f"  review batch A failed: {e}")
+        from .error_utils import log_exception
+        log_exception(debug, "Review batch A", "", e)
 
     # ---- Batch B: Content review ----
     if lang == 'en':
@@ -69,7 +70,8 @@ def review_distilled(content: str, client, topic_links: dict, topic_related: dic
         if isinstance(result, dict) and result.get("content"):
             reviewed = result["content"]
     except Exception as e:
-        debug(f"  review batch B failed: {e}")
+        from .error_utils import log_exception
+        log_exception(debug, "Review batch B", "", e)
 
     # ---- Rules-based pass: formatting normalization ----
     reviewed = _normalize_formatting(reviewed)

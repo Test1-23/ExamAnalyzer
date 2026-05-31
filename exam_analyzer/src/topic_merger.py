@@ -54,7 +54,8 @@ def merge_similar_topics(db: QADatabase, client, debug) -> None:
         vecs = clusterer.vectors
         cos_matrix = vecs @ vecs.T
     except Exception as e:
-        debug(f"  Topic merge encoding failed: {e}")
+        from .error_utils import log_exception
+        log_exception(debug, "Topic merge encoding", "", e)
         return
 
     mergers = {}
@@ -170,7 +171,8 @@ def _flash_review_merges(ambiguous: list, db: QADatabase, client, debug) -> dict
                     # Flash returned a new/renamed canonical — merge both into it
                     return [(t1, canonical), (t2, canonical)]
         except Exception as e:
-            debug(f"  Flash merge review failed for '{t1}'/'{t2}': {e}")
+            from .error_utils import log_exception
+            log_exception(debug, "Flash merge review", f"t1={t1},t2={t2}", e)
         return None
 
     with ThreadPoolExecutor(max_workers=get_worker_limit(len(ambiguous), api_heavy=True)) as executor:

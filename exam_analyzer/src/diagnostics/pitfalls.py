@@ -54,8 +54,8 @@ def auto_discover_pitfalls(db: QADatabase, kp_id: str, debug_cb=None) -> list[di
         model = _get_model(TOPIC_EMBED_MODEL)
         vecs = model.encode(missed_lines, normalize_embeddings=True, convert_to_numpy=True)
     except Exception as e:
-        if debug_cb:
-            debug_cb(f"  Pitfall embedding failed for {kp_id}: {e}")
+        from ..error_utils import log_exception
+        log_exception(debug_cb, "Pitfall embedding", f"kp={kp_id}", e)
         return []
     groups = cluster_by_cosine(vecs, 0.80, min_group_size=3)
     patterns = [{"pattern": missed_lines[g[0]], "count": len(g)} for g in groups]

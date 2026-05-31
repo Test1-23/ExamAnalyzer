@@ -252,18 +252,18 @@ def run_phase2_cycle(db, debug_cb=None) -> dict:
         try:
             splits = _detect_topic_splits(db, debug_cb)
         except Exception as e:
-            if debug_cb:
-                debug_cb(f"  Split detection failed: {e}")
+            from ..error_utils import log_exception
+            log_exception(debug_cb, "Phase2 evolution", "split_detection", e)
         try:
             merges = _detect_topic_merges(db, debug_cb)
         except Exception as e:
-            if debug_cb:
-                debug_cb(f"  Merge detection failed: {e}")
+            from ..error_utils import log_exception
+            log_exception(debug_cb, "Phase2 evolution", "merge_detection", e)
         try:
             dissolved = _process_dissolved_topics(db, debug_cb)
         except Exception as e:
-            if debug_cb:
-                debug_cb(f"  Dissolve processing failed: {e}")
+            from ..error_utils import log_exception
+            log_exception(debug_cb, "Phase2 evolution", "dissolve", e)
         # Record checkpoint
         with db.transaction():
             db.conn.execute(
@@ -278,8 +278,8 @@ def run_phase2_cycle(db, debug_cb=None) -> dict:
         v_result = _adjust_vectors_from_feedback(db, debug_cb)
         vectors_adjusted = sum(v_result.values())
     except Exception as e:
-        if debug_cb:
-            debug_cb(f"  Vector adjustment failed: {e}")
+        from ..error_utils import log_exception
+        log_exception(debug_cb, "Vector adjustment", "", e)
 
     return {"migrated": migrated, "topics_updated": updated,
             "splits": splits, "merges": merges, "dissolved": dissolved,
