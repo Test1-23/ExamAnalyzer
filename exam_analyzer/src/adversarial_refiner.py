@@ -107,7 +107,7 @@ def refine_kp(db: QADatabase, kp_id: str, client, debug_cb=None) -> dict:
     if not kp:
         return {}
 
-    qas = db.get_kp_representative_qas(kp_id)
+    qas = db.kp.get_representative_qas(kp_id)
     if not qas:
         return kp
 
@@ -175,7 +175,7 @@ def refine_kp(db: QADatabase, kp_id: str, client, debug_cb=None) -> dict:
         )
 
         # Update KP in DB with revised content
-        db.upsert_kp(KPSpec(
+        db.kp.upsert(KPSpec(
             kp_id=kp_id,
             name=kp.get("name", ""),
             description=kp.get("description", ""),
@@ -199,7 +199,7 @@ def refine_kp(db: QADatabase, kp_id: str, client, debug_cb=None) -> dict:
     else:
         quality = "accepted"
 
-    db.upsert_kp(KPSpec(
+    db.kp.upsert(KPSpec(
         kp_id=kp_id,
         name=kp.get("name", ""),
         description=kp.get("description", ""),
@@ -289,7 +289,7 @@ def auto_split_kp(db: QADatabase, kp_id: str, client, debug_cb=None) -> list[str
     if not kp:
         return []
 
-    qas = db.get_kp_representative_qas(kp_id)
+    qas = db.kp.get_representative_qas(kp_id)
     if len(qas) < 4:
         return []
 
@@ -301,7 +301,7 @@ def auto_split_kp(db: QADatabase, kp_id: str, client, debug_cb=None) -> list[str
     if len(all_qa_ids) < 4:
         return []
 
-    all_qas = db.get_by_ids(all_qa_ids)
+    all_qas = db.qa.get_by_ids(all_qa_ids)
 
     lang = detect_content_lang(
         (kp.get("core_concept", "") or kp.get("description", "")) +
@@ -360,7 +360,7 @@ def auto_split_kp(db: QADatabase, kp_id: str, client, debug_cb=None) -> list[str
                       and int(i) in all_qa_ids]  # validate: reject position indices, accept only real DB IDs
         if not sub_qa_ids:
             continue
-        db.upsert_kp(KPSpec(kp_id=new_id, name=f"{kp['name']} ({chr(97+len(new_ids))})",
+        db.kp.upsert(KPSpec(kp_id=new_id, name=f"{kp['name']} ({chr(97+len(new_ids))})",
                      description=sub["concept"], core_concept=sub["concept"],
                      core_detail="", cohesion=kp.get("cohesion"),
                      evidence_count=len(sub_qa_ids), quality="draft"))
@@ -444,7 +444,7 @@ def auto_merge_kps(db: QADatabase, issues: list[dict], debug_cb=None) -> int:
                 new_tgt = kp_a if edge["target_kp"] == kp_b else edge["target_kp"]
                 if new_src == new_tgt:
                     continue
-                db.upsert_kp_edge(KpEdgeSpec(
+                db.kp.upsert_edge(KpEdgeSpec(
                     source_kp=new_src, target_kp=new_tgt,
                     edge_type=edge["edge_type"],
                     retrieval_weight=edge["retrieval_weight"],
@@ -457,7 +457,7 @@ def auto_merge_kps(db: QADatabase, issues: list[dict], debug_cb=None) -> int:
             # Delete B
             db.conn.execute("DELETE FROM knowledge_points WHERE id=?", (kp_b,))
 
-        db.record_evolution(
+        db.analysis.record_evolution(
             kp_id=kp_a,
             trigger_type="auto_merge",
             trigger_detail=f"Merged {kp_b} into {kp_a}: {issue.get('issue', '')}",
