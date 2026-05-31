@@ -19,82 +19,112 @@ _log = get_logger()
 # Cross-paper: signatures, baselines, anomaly detection
 # ═══════════════════════════════════════════════════════════════
 
-def compute_paper_signature(db: QADatabase, display_name: str = None) -> dict:
-    """Compute structural fingerprint for a paper (or all papers if display_name is None)."""
-    paper_filter = "WHERE paper = ?" if display_name else ""
-    params = (display_name,) if display_name else ()
 
+def _paper_filter(display_name):
+    """Return (WHERE_or_AND_clause, params) for optional paper-scoped queries.
+
+    Returns ("WHERE paper = ?", (name,)) when display_name is given,
+    otherwise ("", ()) so queries work on all papers.
+    """
+    if display_name:
+        return ("AND paper = ?", (display_name,))
+    return ("", ())
+
+
+def _query_paper_stats(db, display_name):
+    """QA count, average answer length, and distinct topic count."""
+    pf, params = _paper_filter(display_name)
     qa_rows = db.conn.execute(
         f"SELECT COUNT(*) as cnt, AVG(LENGTH(answer_text)) as avg_len "
-        f"FROM qa_pairs {paper_filter}", params
+        f"FROM qa_pairs WHERE 1=1 {pf}", params
     ).fetchone()
     qa_count = qa_rows["cnt"] if qa_rows else 0
-    avg_answer_length = qa_rows["avg_len"] or 0
+    avg_len = qa_rows["avg_len"] or 0
 
     topic_rows = db.conn.execute(
         f"SELECT COUNT(DISTINCT topic) as cnt FROM qa_pairs "
-        f"WHERE topic != '' AND topic != '(uncategorized)' "
-        f"{'AND paper = ?' if display_name else ''}", params,
+        f"WHERE topic != '' AND topic != '(uncategorized)' {pf}", params,
     ).fetchone()
     topic_count = topic_rows["cnt"] if topic_rows else 0
+    return qa_count, round(avg_len, 1) if avg_len else None, topic_count
 
+
+def _query_paper_distributions(db, display_name):
+    """Command verb and difficulty estimate distributions."""
+    pf, params = _paper_filter(display_name)
     verb_rows = db.conn.execute(
         f"SELECT command_verb, COUNT(*) as cnt FROM qa_pairs "
-        f"WHERE command_verb != '' AND command_verb != 'unknown' "
-        f"{'AND paper = ?' if display_name else ''} "
+        f"WHERE command_verb != '' AND command_verb != 'unknown' {pf} "
         f"GROUP BY command_verb", params
     ).fetchall()
     verb_dist = {r["command_verb"]: r["cnt"] for r in verb_rows}
 
     diff_rows = db.conn.execute(
         f"SELECT difficulty_estimate, COUNT(*) as cnt FROM qa_pairs "
-        f"WHERE difficulty_estimate != '' "
-        f"{'AND paper = ?' if display_name else ''} "
+        f"WHERE difficulty_estimate != '' {pf} "
         f"GROUP BY difficulty_estimate", params
     ).fetchall()
     difficulty_dist = {r["difficulty_estimate"]: r["cnt"] for r in diff_rows}
+    return verb_dist, difficulty_dist
 
+
+def _query_paper_miss_rate(db, display_name):
+    """Average miss rate across all QAs with feedback data."""
+    paper_clause = "AND q.paper = ?" if display_name else ""
+    params = (display_name,) if display_name else ()
     miss_rows = db.conn.execute(
-        f"SELECT AVG(CAST(missed_count AS REAL) / CAST(covered_count + missed_count AS REAL)) as avg_miss "
+        f"SELECT AVG(CAST(missed_count AS REAL) / "
+        f"CAST(covered_count + missed_count AS REAL)) as avg_miss "
         f"FROM question_feedback f JOIN qa_pairs q ON f.qa_id = q.id "
-        f"{'AND q.paper = ?' if display_name else ''} "
+        f"{paper_clause} "
         f"WHERE covered_count + missed_count > 0", params,
     ).fetchone()
-    avg_miss_rate = miss_rows["avg_miss"] if miss_rows else None
+    if miss_rows and miss_rows["avg_miss"] is not None:
+        return round(miss_rows["avg_miss"], 3)
+    return None
 
+
+def _query_paper_topic_purity(db, display_name):
+    """Average topic purity (1 - std_len/avg_len) across topics with >= 2 QAs."""
+    pf, params = _paper_filter(display_name)
     purity_rows = db.conn.execute(
         f"SELECT topic, COUNT(*) as n FROM qa_pairs "
-        f"WHERE topic != '' AND topic != '(uncategorized)' "
-        f"{'AND paper = ?' if display_name else ''} "
+        f"WHERE topic != '' AND topic != '(uncategorized)' {pf} "
         f"GROUP BY topic HAVING n >= 2", params
     ).fetchall()
     purities = []
     for r in purity_rows:
-        if display_name:
-            var_rows = db.conn.execute(
-                "SELECT LENGTH(answer_text) as l FROM qa_pairs WHERE topic = ? AND paper = ?",
-                (r["topic"], display_name),
-            ).fetchall()
-        else:
-            var_rows = db.conn.execute(
-                "SELECT LENGTH(answer_text) as l FROM qa_pairs WHERE topic = ?", (r["topic"],)
-            ).fetchall()
+        var_rows = db.conn.execute(
+            "SELECT LENGTH(answer_text) as l FROM qa_pairs "
+            "WHERE topic = ?" + (f" {pf}" if display_name else ""),
+            (r["topic"],) + (params if display_name else ()),
+        ).fetchall()
         lens = [v["l"] for v in var_rows]
         if len(lens) >= 2:
             avg_len = sum(lens) / len(lens)
             if avg_len > 0:
                 std = statistics.stdev(lens)
                 purities.append(max(0.0, 1.0 - std / avg_len))
-    topic_purity_avg = sum(purities) / len(purities) if purities else None
+    if purities:
+        return round(sum(purities) / len(purities), 3)
+    return None
+
+
+def compute_paper_signature(db: QADatabase, display_name: str = None) -> dict:
+    """Compute structural fingerprint for a paper (or all papers if display_name is None)."""
+    qa_count, avg_answer_length, topic_count = _query_paper_stats(db, display_name)
+    verb_dist, difficulty_dist = _query_paper_distributions(db, display_name)
+    avg_miss_rate = _query_paper_miss_rate(db, display_name)
+    topic_purity_avg = _query_paper_topic_purity(db, display_name)
 
     return {
         "qa_count": qa_count,
         "topic_count": topic_count,
         "verb_dist": json.dumps(verb_dist),
         "difficulty_dist": json.dumps(difficulty_dist),
-        "avg_miss_rate": round(avg_miss_rate, 3) if avg_miss_rate is not None else None,
-        "avg_answer_length": round(avg_answer_length, 1) if avg_answer_length else None,
-        "topic_purity_avg": round(topic_purity_avg, 3) if topic_purity_avg is not None else None,
+        "avg_miss_rate": avg_miss_rate,
+        "avg_answer_length": avg_answer_length,
+        "topic_purity_avg": topic_purity_avg,
     }
 
 
