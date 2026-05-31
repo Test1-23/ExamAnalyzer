@@ -23,8 +23,27 @@ class QADatabase:
 
     Interface freeze policy (2026-05-31): No new methods shall be added to this
     class.  New data access should use the Store directly: ``db.qa.insert(...)``,
-    ``db.topic.upsert_link(...)``, etc.  Existing proxy methods remain for
-    backward compatibility but are conceptually deprecated.
+    ``db.topic.upsert_link(...)``, etc.
+
+    **Deprecated proxy methods** (63 methods):
+    One-line delegations to Store methods.  Marked ``(deprecated — use
+    db.store.method instead)`` in their docstrings.  Callers should migrate
+    to the Store path during normal maintenance.
+
+    **Stable API** (7 methods — permanent, not deprecated):
+    These are widely-used convenience wrappers (4+ caller files each) that
+    have been validated across ~50 call sites.  They are intentionally kept
+    as thin QADatabase methods rather than pushed to Store methods:
+
+    ==================== ================================================
+    ``get(qa_id)``        Single QA lookup — ~10 caller files
+    ``count()``           Total QA count — 6 caller files
+    ``get_all()``         All QAs ordered by id — 6 caller files
+    ``get_kp_by_id(id)``  Single KP lookup — 4 caller files
+    ``get_topic_groups()`` Topic→QA grouping — 5 caller files
+    ``get_verb_patterns()`` Command verb statistics — 4 caller files
+    ``checkpoint(...)``   Analysis progress checkpoint — 4 caller files
+    ==================== ================================================
     """
 
 
@@ -86,11 +105,11 @@ class QADatabase:
                               parent_question=parent_question, knowledge_summary=knowledge_summary)
 
     def get(self, qa_id: int) -> Optional[dict]:
-        """(deprecated — use db.qa.get instead)"""
+        """(stable API) Single QA lookup by id."""
         return self._qb.get("qa_pairs", qa_id)
 
     def get_all(self) -> list[dict]:
-        """(deprecated — use db.qa.get_all instead)"""
+        """(stable API) All QAs ordered by id."""
         return self._qb.get_all("qa_pairs", order_by="id")
 
     def get_by_ids(self, ids: list[int]) -> list[dict]:
@@ -98,7 +117,7 @@ class QADatabase:
         return self.qa.get_by_ids(ids)
 
     def count(self) -> int:
-        """(deprecated — use db.qa.count instead)"""
+        """(stable API) Total QA count."""
         return self._qb.count("qa_pairs")
 
     def record_attempt(self, qa_id: int, success: bool, reason: str = ""):
@@ -106,7 +125,7 @@ class QADatabase:
         self.qa.record_attempt(qa_id, success, reason)
 
     def get_topic_groups(self) -> dict[str, list[dict]]:
-        """(deprecated — use db.qa.get_topic_groups instead)"""
+        """(stable API) Topic→QA grouping."""
         return self.qa.get_topic_groups()
 
     def log_api_call(self, stage: str, model: str, paper: str = "",
@@ -325,7 +344,7 @@ class QADatabase:
             verb_family=spec.verb_family)
 
     def get_verb_patterns(self) -> list[dict]:
-        """(deprecated — use db.analysis.get_verb_patterns instead)"""
+        """(stable API) Command verb statistics."""
         return self.analysis.get_verb_patterns()
 
     # ---- Topic difficulty ----
@@ -354,7 +373,7 @@ class QADatabase:
     # ---- Analysis checkpoints ----
 
     def checkpoint(self, task_name: str, qa_count: int, status: str = "completed"):
-        """(deprecated — use db.analysis.checkpoint instead)"""
+        """(stable API) Analysis progress checkpoint."""
         self.analysis.checkpoint(task_name, qa_count, status)
 
     def get_checkpoint(self, task_name: str) -> dict:
@@ -378,7 +397,7 @@ class QADatabase:
         return self.kp.get_all()
 
     def get_kp_by_id(self, kp_id: str) -> dict:
-        """(deprecated — use db.kp.get_by_id instead)"""
+        """(stable API) Single KP lookup by id."""
         return self.kp.get_by_id(kp_id)
 
     def get_kp_representative_qas(self, kp_id: str, limit: int = 3) -> list[dict]:
