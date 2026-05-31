@@ -104,6 +104,9 @@ def mock_flash(monkeypatch):
         "src.adversarial_refiner",
         "src.knowledge_graph",
         "src.prompt_factory",
+        "src.topic_merger",
+        "src.reviewer",
+        "src.question_generator",
     ):
         try:
             monkeypatch.setattr(f"{mod_name}.call_flash", mock)
