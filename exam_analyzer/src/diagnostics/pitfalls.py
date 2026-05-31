@@ -25,8 +25,6 @@ Two subsystems that run after pipeline completion:
 2. Cross-paper: structural fingerprints, dimension baselines, anomaly detection
 """
 
-import json
-
 _log = get_logger()
 
 

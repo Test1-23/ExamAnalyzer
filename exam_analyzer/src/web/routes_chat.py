@@ -148,11 +148,9 @@ def chat():
                 retriever.db.save_student_memory(session_id, "question", topic, question[:500])
                 retriever.db.upsert_knowledge_state(session_id, topic, "learning")
                 try:
-                    rows = retriever.db.conn.execute(
-                        "SELECT kp_id FROM qa_kp_membership WHERE qa_id = ?", (qa["id"],)
-                    ).fetchall()
-                    for r in rows:
-                        retriever.db.record_trajectory(session_id, r["kp_id"], "new", "learning", "chat_question")
+                    kp_ids = retriever.db.kp.get_kp_ids_for_qa(qa["id"])
+                    for kp_id in kp_ids:
+                        retriever.db.record_trajectory(session_id, kp_id, "new", "learning", "chat_question")
                 except Exception:
                     _log.debug("Failed to record trajectory", exc_info=True)
     except Exception:
