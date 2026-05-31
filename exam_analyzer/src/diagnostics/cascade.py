@@ -30,7 +30,7 @@ def _detect_topic_splits(db: QADatabase, debug_cb=None) -> int:
     splits = 0
     for t in topics:
         topic_id = t["topic_id"]
-        frags = db.get_topic_fragments(topic_id)
+        frags = db.topic.get_fragments(topic_id)
         if len(frags) < 6:
             continue
 
@@ -119,12 +119,12 @@ def _detect_topic_splits(db: QADatabase, debug_cb=None) -> int:
         old_name = old_name["name"] if old_name else topic_id
 
         with db.transaction():
-            db.upsert_dynamic_topic(new_id_a, name=f"{old_name} (A)", quality="embryonic")
-            db.upsert_dynamic_topic(new_id_b, name=f"{old_name} (B)", quality="embryonic")
+            db.topic.upsert(new_id_a, name=f"{old_name} (A)", quality="embryonic")
+            db.topic.upsert(new_id_b, name=f"{old_name} (B)", quality="embryonic")
             for fid in s1:
-                db.set_fragment_membership(fid, new_id_a, loyalty=0.5)
+                db.topic.set_fragment_membership(fid, new_id_a, loyalty=0.5)
             for fid in s2:
-                db.set_fragment_membership(fid, new_id_b, loyalty=0.5)
+                db.topic.set_fragment_membership(fid, new_id_b, loyalty=0.5)
 
             db.conn.execute(
                 """UPDATE dynamic_topics SET quality='dissolved',
@@ -152,7 +152,7 @@ def _detect_topic_merges(db: QADatabase, debug_cb=None) -> int:
 
     # Pre-load fragment help data for affinity computation
     frag_helps = dq.load_fragment_helps()
-    topic_helps = {tid: db.get_topic_helped_questions(tid) for tid in topic_ids}
+    topic_helps = {tid: db.fragment.get_topic_helped_questions(tid) for tid in topic_ids}
 
     merges = 0
     merged_set = set()
@@ -166,8 +166,8 @@ def _detect_topic_merges(db: QADatabase, debug_cb=None) -> int:
             a, b = topic_ids[i], topic_ids[j]
 
             # Behavioral overlap: helped question sets
-            a_helped = db.get_topic_helped_questions(a)
-            b_helped = db.get_topic_helped_questions(b)
+            a_helped = db.fragment.get_topic_helped_questions(a)
+            b_helped = db.fragment.get_topic_helped_questions(b)
             if not a_helped or not b_helped:
                 continue
 
@@ -179,8 +179,8 @@ def _detect_topic_merges(db: QADatabase, debug_cb=None) -> int:
                 continue
 
             # Bidirectional fragment affinity
-            a_frags = db.get_topic_fragments(a)
-            b_frags = db.get_topic_fragments(b)
+            a_frags = db.topic.get_fragments(a)
+            b_frags = db.topic.get_fragments(b)
             a_aff = sum(_compute_affinity(db, fid, b, frag_helps, topic_helps)
                         for fid in a_frags)
             b_aff = sum(_compute_affinity(db, fid, a, frag_helps, topic_helps)
@@ -202,9 +202,9 @@ def _detect_topic_merges(db: QADatabase, debug_cb=None) -> int:
             merged_name = f"{(name_a['name'] if name_a else a)} + {(name_b['name'] if name_b else b)}"
 
             with db.transaction():
-                db.upsert_dynamic_topic(new_id, name=merged_name, quality="embryonic")
+                db.topic.upsert(new_id, name=merged_name, quality="embryonic")
                 for fid in a_frags + b_frags:
-                    db.set_fragment_membership(fid, new_id, loyalty=0.5)
+                    db.topic.set_fragment_membership(fid, new_id, loyalty=0.5)
 
                 db.conn.execute(
                     """UPDATE dynamic_topics SET quality='dissolved',
@@ -239,7 +239,7 @@ def _process_dissolved_topics(db: QADatabase, debug_cb=None) -> int:
     redistributed = 0
     for row in dissolved:
         topic_id = row["topic_id"]
-        frags = db.get_topic_fragments(topic_id)
+        frags = db.topic.get_fragments(topic_id)
         if not frags:
             continue
 
@@ -253,10 +253,10 @@ def _process_dissolved_topics(db: QADatabase, debug_cb=None) -> int:
                     best_topic = other
 
             if best_topic and best_aff > 0.1:
-                db.set_fragment_membership(fid, best_topic, loyalty=0.3)
+                db.topic.set_fragment_membership(fid, best_topic, loyalty=0.3)
             else:
                 # Orphan: mark with low loyalty to current (dissolved) topic
-                db.set_fragment_membership(fid, topic_id, loyalty=0.0)
+                db.topic.set_fragment_membership(fid, topic_id, loyalty=0.0)
             redistributed += 1
 
     if debug_cb and redistributed:
@@ -306,7 +306,7 @@ def _adjust_vectors_from_feedback(db: QADatabase, debug_cb=None) -> dict:
     ).fetchall()
     centrality_updates = []
     for t in topics:
-        cent_rows = db.get_topic_fragment_centralities(t["topic_id"])
+        cent_rows = db.fragment.get_topic_centralities(t["topic_id"])
         for cent in cent_rows:
             if cent["verification_count"] < 1:
                 continue
@@ -374,7 +374,7 @@ def _adjust_vectors_from_feedback(db: QADatabase, debug_cb=None) -> dict:
             if indices:
                 kp_vecs = all_vecs[indices]
                 centroid = _compute_graph_centroid(list(kp_vecs), [1.0] * len(indices))
-                db.upsert_kp_vector(kp_id, centroid)
+                db.vector.upsert_kp_vector(kp_id, centroid)
                 result["kps_adjusted"] += 1
 
     # Layer 3: Topic vectors (cascade from KP vectors)
@@ -392,13 +392,13 @@ def _adjust_vectors_from_feedback(db: QADatabase, debug_cb=None) -> dict:
         vecs = []
         weights = []
         for kp_id in kp_ids:
-            v = db.get_kp_vector(kp_id)
+            v = db.vector.get_kp_vector(kp_id)
             if v is not None:
                 vecs.append(v)
                 weights.append(1.0)
         if vecs:
             centroid = _compute_graph_centroid(vecs, weights)
-            db.upsert_topic_vector(topic_id, centroid, len(kp_ids))
+            db.vector.upsert_topic_vector(topic_id, centroid, len(kp_ids))
             result["topics_adjusted"] += 1
 
     if debug_cb and sum(result.values()) > 0:

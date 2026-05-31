@@ -69,7 +69,7 @@ def auto_discover_pitfalls(db: QADatabase, kp_id: str, debug_cb=None) -> list[di
             except (json.JSONDecodeError, TypeError):
                 var_dict = {}
             var_dict["pitfalls"] = patterns[:5]
-            db.upsert_kp(KPSpec(
+            db.kp.upsert(KPSpec(
                 kp_id=kp_id, name=kp.get("name", ""), description=kp.get("description", ""),
                 core_concept=kp.get("core_concept", ""), core_detail=kp.get("core_detail", ""),
                 variations=json.dumps(var_dict),
@@ -85,7 +85,7 @@ def auto_discover_pitfalls(db: QADatabase, kp_id: str, debug_cb=None) -> list[di
 
 def compute_exam_trends(db: QADatabase, debug_cb=None) -> int:
     """Compute exam trends for all KPs with >= 2 years of data."""
-    kps = db.get_all_kps()
+    kps = db.kp.get_all()
     if not kps:
         return 0
     trend_count = 0
@@ -114,7 +114,7 @@ def compute_exam_trends(db: QADatabase, debug_cb=None) -> int:
                 diff_label = "advanced"
             elif avg and avg > DIFFICULTY_EASY_THRESHOLD:
                 diff_label = "intermediate"
-            db.upsert_exam_trend(
+            db.analysis.upsert_exam_trend(
                 kp_id=kp_id, year=r["year"], season=r["season"],
                 occurrence_count=r["cnt"], avg_difficulty=diff_label,
             )

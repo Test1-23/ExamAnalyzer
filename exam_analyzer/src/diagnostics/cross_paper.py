@@ -279,7 +279,7 @@ def run_closed_loop(db, api_url: str, api_key: str, debug_callback=None):
         else:
             print(f"[DX] {msg}")
     _debug("Starting closed-loop improvements...")
-    kps = db.get_all_kps()
+    kps = db.kp.get_all()
     if not kps:
         _debug("No KPs to improve")
         return

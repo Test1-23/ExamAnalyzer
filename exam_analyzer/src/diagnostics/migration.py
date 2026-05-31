@@ -39,7 +39,7 @@ def _compute_loyalty(db: QADatabase, fragment_id: str, topic_id: str,
     if topic_helps is not None:
         topic_helped = topic_helps.get(topic_id, set())
     else:
-        topic_helped = db.get_topic_helped_questions(topic_id)
+        topic_helped = db.fragment.get_topic_helped_questions(topic_id)
     if not topic_helped:
         return 0.5
 
@@ -65,7 +65,7 @@ def _compute_affinity(db: QADatabase, fragment_id: str, topic_id: str,
     if topic_helps is not None:
         topic_helped = topic_helps.get(topic_id, set())
     else:
-        topic_helped = db.get_topic_helped_questions(topic_id)
+        topic_helped = db.fragment.get_topic_helped_questions(topic_id)
     if not topic_helped:
         return 0.0
 
@@ -116,7 +116,7 @@ def _run_migration_cycle(db: QADatabase, debug_cb=None) -> int:
         "SELECT topic_id FROM dynamic_topics"
     ).fetchall()]
     for topic_id in all_topics:
-        topic_helps[topic_id] = db.get_topic_helped_questions(topic_id)
+        topic_helps[topic_id] = db.fragment.get_topic_helped_questions(topic_id)
 
     migration_candidates = {}
     for row in rows:
@@ -147,7 +147,7 @@ def _run_migration_cycle(db: QADatabase, debug_cb=None) -> int:
         batch_threshold = 2 if current_topic_mass[src_topic] < 5 else 3
         if len(fids) >= batch_threshold:
             for fid in fids:
-                db.set_fragment_membership(fid, dst_topic, loyalty=0.5)
+                db.topic.set_fragment_membership(fid, dst_topic, loyalty=0.5)
                 migrated += 1
             if debug_cb:
                 debug_cb(f"  Migration: {len(fids)} fragments {src_topic} -> {dst_topic}")
@@ -173,7 +173,7 @@ def _update_topic_stats(db: QADatabase, debug_cb=None) -> int:
 
     topic_helps = {}
     for topic_id in all_topics:
-        topic_helps[topic_id] = db.get_topic_helped_questions(topic_id)
+        topic_helps[topic_id] = db.fragment.get_topic_helped_questions(topic_id)
 
     updated = 0
     for topic_id in all_topics:
@@ -189,7 +189,7 @@ def _update_topic_stats(db: QADatabase, debug_cb=None) -> int:
                     (topic_id,)
                 )
             continue
-        frags = db.get_topic_fragments(topic_id)
+        frags = db.topic.get_fragments(topic_id)
         if len(frags) < 2:
             cohesion = 1.0
         else:
@@ -204,7 +204,7 @@ def _update_topic_stats(db: QADatabase, debug_cb=None) -> int:
         ).fetchone()
         churn = prev_rows["cnt"] if prev_rows else 0
         stability = 1.0 - (churn / max(mass, 1))
-        db.update_topic_stats(topic_id, mass, round(cohesion, 3),
+        db.topic.update_stats(topic_id, mass, round(cohesion, 3),
                               round(max(0.0, stability), 3))
         if stability >= 0.8 and mass >= 4:
             with db.transaction():
