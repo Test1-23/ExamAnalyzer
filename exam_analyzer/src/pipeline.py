@@ -10,6 +10,7 @@ import re
 import time
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from functools import partial
 from typing import Callable, Optional
 
 from .deepseek_client import create_client, call_flash
@@ -251,6 +252,249 @@ def _run_kp_refinement(db, client, debug):
     debug("KP structural refinement complete (behavior-driven split/merge/consistency)")
 
 
+# ============================================================
+# Phase 1 worker — extracted from run_pipeline() closure
+# ============================================================
+
+
+def _phase1_worker(qa, client, db, debug, display_name,
+                    existing_topics, tracker):
+    """Phase 1: summary → insert QA → extract MS fragments → assign topic."""
+    t0 = time.time()
+    summary, topic = _generate_summary(
+        qa.question_text, qa.answer_text, client, debug,
+        existing_topics=existing_topics)
+    db.log_api_call("summary", "flash", display_name,
+                    qa.question_number, int((time.time() - t0) * 1000),
+                    success=True, output_size=len(summary))
+    qa_id = db.insert(
+        question_text=qa.question_text, answer_text=qa.answer_text,
+        knowledge_summary=summary, topic=topic,
+        paper=display_name, question_number=qa.question_number,
+        parent_question=qa.parent_question)
+    db.record_attempt(qa_id, success=True)
+
+    try:
+        fragments = _extract_ms_fragments(qa.answer_text, qa_id, client, debug)
+        if fragments:
+            with db.transaction():
+                db.insert_fragments_batch(fragments)
+                topic_id = make_topic_id(topic)
+                db.upsert_dynamic_topic(topic_id, name=topic, quality="embryonic")
+                for frag in fragments:
+                    db.set_fragment_membership(
+                        frag["point_id"], topic_id, loyalty=0.5)
+    except Exception as e:
+        debug(f"  fragment extraction failed for Q{qa.question_number}: {e}")
+
+    tracker.step("")
+    return qa_id
+
+
+# ============================================================
+# Phase 2 step functions — extracted from run_pipeline() closures
+# ============================================================
+
+
+def _step_summarize_retrieve(qa, wmap, extopics, client, db, debug,
+                              display_name, retriever, tracker):
+    """Flash summary + dual-channel retrieval → top_similar list."""
+    qn = qa.question_number
+    t0 = time.time()
+    summary, step0_topic = _generate_summary(
+        qa.question_text, qa.answer_text, client, debug,
+        existing_topics=extopics)
+    db.log_api_call("summary", "flash", display_name, qn,
+                    int((time.time() - t0) * 1000), success=True,
+                    output_size=len(summary))
+    tracker.step("")
+
+    # Layer 2 dual-channel retrieval (embedding + structure + behavior)
+    all_similar = retriever.search_dual_channel(
+        summary, threshold=RETRIEVAL_THRESHOLD, min_k=RETRIEVAL_MIN_K,
+        max_cap=RETRIEVAL_MAX_CAP, query_topic=step0_topic)
+
+    # Filter to top-4 by Beta weight for Pro context
+    top_similar = sorted(
+        all_similar,
+        key=lambda qa_ref: wmap.get(qa_ref["id"], {}).get("mean", 0.5),
+        reverse=True,
+    )[:4]
+
+    # Phase 3: Include stable KP text as additional reference material
+    stable_kps = db.get_stable_topics()
+    if stable_kps:
+        kp_refs = [{
+            "id": -1,
+            "question_text": f"[KP] {kp['kp_concept']}",
+            "answer_text": kp["kp_detail"] or kp["kp_concept"],
+            "topic": kp.get("name", ""),
+            "_score": kp.get("stability", 0.8),
+            "_is_kp": True,
+        } for kp in stable_kps[:3]]
+        top_similar = top_similar[:4] + kp_refs
+
+    return summary, step0_topic, top_similar, all_similar
+
+
+def _step_answer_and_grade(qa, top_similar, step0_topic, client, db,
+                            debug, display_name, tracker):
+    """Round 1: Flash answers + Round 2: Flash grades → feedback data."""
+    qn = qa.question_number
+    # Round 1: Flash answers
+    t0 = time.time()
+    r1_ok = True
+    try:
+        messages = _build_answer_prompt(qa.question_text, top_similar)
+        result = call_flash(client, messages, max_retries=1, debug_callback=debug)
+    except Exception as e:
+        debug(f"  Q{qn} Round1 failed: {e}")
+        result = {"answer": "", "used_qa_indices": []}
+        r1_ok = False
+    db.log_api_call("answer", "flash", display_name, qn,
+                    int((time.time() - t0) * 1000), success=r1_ok,
+                    output_size=len(result.get("answer", "")))
+    tracker.step("")
+
+    used_indices = result.get("used_qa_indices", [])
+    used_ids = set()
+    for idx in used_indices:
+        if isinstance(idx, (int, float)) and 1 <= int(idx) <= len(top_similar):
+            qa_ref = top_similar[int(idx) - 1]
+            if not qa_ref.get("_is_kp"):
+                db.record_attempt(qa_ref["id"], success=True)
+                used_ids.add(qa_ref["id"])
+    for qa_ref in top_similar:
+        if qa_ref.get("_is_kp"):
+            continue
+        if qa_ref["id"] not in used_ids:
+            ref_topic = qa_ref.get("topic", "")
+            reason = ("topic_mismatch" if (ref_topic and step0_topic
+                      and ref_topic != step0_topic) else "retrieval_irrelevant")
+            db.record_attempt(qa_ref["id"], success=False, reason=reason)
+
+    # Round 2: Flash grades
+    t0 = time.time()
+    r2_ok = True
+    r2_topic = ""
+    grade = ""
+    covered, missed_raw = [], []
+    try:
+        grade_msgs = _build_grade_prompt(
+            qa.question_text, result.get("answer", ""), qa.answer_text)
+        grade = call_flash(client, grade_msgs, max_retries=1, debug_callback=debug)
+        if isinstance(grade, dict):
+            r2_topic = grade.get("topic", "")
+            covered = grade.get("covered_points", [])
+            missed_raw = grade.get("missed_points", [])
+        else:
+            r2_ok = False
+    except Exception as e:
+        debug(f"  Q{qn} Round2 failed: {e}")
+        r2_ok = False
+
+    missed_texts, miss_cats_json = _parse_missed_points(missed_raw)
+    db.log_api_call("grade", "flash", display_name, qn,
+                    int((time.time() - t0) * 1000), success=r2_ok,
+                    output_size=len(str(grade)))
+    tracker.step("")
+    return used_indices, used_ids, covered, missed_texts, miss_cats_json, r2_topic
+
+
+def _step_insert_and_feedback(qa, summary, step0_topic, r2_topic,
+                               all_similar, top_similar, used_indices,
+                               covered, missed_texts, miss_cats_json,
+                               db, debug, tracker, display_name):
+    """DB insert + feedback + cross-topic ref collection."""
+    topic = r2_topic or step0_topic
+    cross_refs = {}
+    for idx in used_indices:
+        if isinstance(idx, (int, float)) and 1 <= int(idx) <= len(top_similar):
+            ref_topic = top_similar[int(idx) - 1].get("topic", "")
+            if ref_topic and ref_topic != topic:
+                key = (topic, ref_topic)
+                cross_refs[key] = cross_refs.get(key, 0) + 1
+
+    qa_id = db.insert(
+        question_text=qa.question_text, answer_text=qa.answer_text,
+        knowledge_summary=summary, topic=topic,
+        paper=display_name, question_number=qa.question_number,
+        parent_question=qa.parent_question)
+    db.record_attempt(qa_id, success=True)
+    db.log_question_feedback(
+        qa_id=qa_id, retrieval_count=len(all_similar),
+        used_qa_count=len(used_indices),
+        step0_topic=step0_topic, round2_topic=r2_topic,
+        covered_count=len(covered), missed_count=len(missed_texts),
+        missed_text="\n".join(missed_texts) if missed_texts else "",
+        miss_categories=miss_cats_json)
+    return qa_id, topic, cross_refs
+
+
+def _step_fragment_and_kp(qa, qa_id, topic, used_ids, covered,
+                           missed_texts, client, db, debug, tracker):
+    """Extract MS fragments + LLM KP classification + behavior recording."""
+    try:
+        fragments = _extract_ms_fragments(qa.answer_text, qa_id, client, debug)
+        if fragments:
+            db.insert_fragments_batch(fragments)
+            topic_id = make_topic_id(topic)
+            db.upsert_dynamic_topic(topic_id, name=topic, quality="embryonic")
+            for frag in fragments:
+                db.set_fragment_membership(
+                    frag["point_id"], topic_id, loyalty=0.5)
+
+        # Layer 1: LLM KP classification (only when KPs exist)
+        kps = db.get_all_kps()
+        if kps:
+            kp_concepts = [{
+                "id": k["id"],
+                "concept": k.get("core_concept", k.get("name", "")),
+                "evidence": k.get("evidence_count", 0),
+            } for k in kps]
+            kp_scores = _classify_qa_against_kps(
+                qa.question_text, qa.answer_text, kp_concepts, client, debug)
+            if kp_scores:
+                _place_qa_vector_from_kp_scores(db, qa_id, kp_scores, debug)
+
+        # Record behavior: fragments from used QAs helped this question
+        _record_fragment_help(used_ids, covered, missed_texts, db, qa_id)
+    except Exception as e:
+        debug(f"  fragment extraction failed for Q{qa.question_number}: {e}")
+    tracker.step("")
+
+
+def _process_one_question_inner(qa, wmap, extopics, client, db,
+                                 debug, display_name, retriever, tracker):
+    """Orchestrate the 4-step Phase 2 processing for a single question."""
+    qn = qa.question_number
+
+    # Step 0: Summarise + retrieve similar QAs
+    summary, step0_topic, top_similar, all_similar = _step_summarize_retrieve(
+        qa, wmap, extopics, client, db, debug, display_name, retriever, tracker)
+
+    # Step 1: Answer + grade via Flash
+    used_indices, used_ids, covered, missed_texts, miss_cats_json, r2_topic = \
+        _step_answer_and_grade(qa, top_similar, step0_topic, client, db,
+                                debug, display_name, tracker)
+
+    # Step 2: Insert QA + feedback into DB
+    qa_id, topic, cross_refs = _step_insert_and_feedback(
+        qa, summary, step0_topic, r2_topic,
+        all_similar, top_similar, used_indices,
+        covered, missed_texts, miss_cats_json,
+        db, debug, tracker, display_name)
+
+    # Step 3: Fragment extraction + KP classification
+    _step_fragment_and_kp(qa, qa_id, topic, used_ids, covered,
+                           missed_texts, client, db, debug, tracker)
+
+    debug(f"  Q{qn}: retrieved={len(all_similar)}, shown={len(top_similar)}, "
+           f"used={len(used_indices)}, topic={topic}, "
+           f"covered={len(covered)}, missed={len(missed_texts)}")
+    return (qa_id, summary, cross_refs)
+
+
 def run_pipeline(
     api_url: str,
     api_key: str,
@@ -373,41 +617,14 @@ def run_pipeline(
 
             existing_topics = _get_existing_topics(db) if db.count() > 0 else None
 
-            def _phase1_worker(qa):
-                t0 = time.time()
-                summary, topic = _generate_summary(qa.question_text, qa.answer_text, client, _debug,
-                                                   existing_topics=existing_topics)
-                db.log_api_call("summary", "flash", display_name,
-                                qa.question_number, int((time.time()-t0)*1000),
-                                success=True, output_size=len(summary))
-                qa_id = db.insert(question_text=qa.question_text, answer_text=qa.answer_text,
-                                  knowledge_summary=summary, topic=topic,
-                                  paper=display_name, question_number=qa.question_number,
-                                  parent_question=qa.parent_question)
-                db.record_attempt(qa_id, success=True)
-
-                # Phase 1: Extract MS fragments + assign to initial topic
-                try:
-                    fragments = _extract_ms_fragments(
-                        qa.answer_text, qa_id, client, _debug)
-                    if fragments:
-                        with db.transaction():
-                            db.insert_fragments_batch(fragments)
-                            topic_id = make_topic_id(topic)
-                            db.upsert_dynamic_topic(
-                                topic_id, name=topic, quality="embryonic")
-                            for frag in fragments:
-                                db.set_fragment_membership(
-                                    frag["point_id"], topic_id, loyalty=0.5)
-                except Exception as e:
-                    _debug(f"  fragment extraction failed for Q{qa.question_number}: {e}")
-
-                tracker.step("")
-                return qa_id
+            _p1_worker = partial(_phase1_worker,
+                                  client=client, db=db, debug=_debug,
+                                  display_name=display_name,
+                                  existing_topics=existing_topics, tracker=tracker)
 
             tracker.step("QA pairing")  # Stage 2 complete
             with ThreadPoolExecutor(max_workers=get_worker_limit(len(qa_pairs))) as executor:
-                futures = {executor.submit(_phase1_worker, qa): qa for qa in qa_pairs}
+                futures = {executor.submit(_p1_worker, qa): qa for qa in qa_pairs}
                 for future in as_completed(futures):
                     try:
                         future.result()
@@ -429,205 +646,16 @@ def run_pipeline(
             weight_map = db.get_all_weights()
             existing_topics = _get_existing_topics(db) if db.count() > 0 else None
 
-            def _process_one_question(qa):
-                try:
-                    return _process_one_question_inner(qa, weight_map, existing_topics)
-                except Exception as e:
-                    _debug(f"  Q{qa.question_number} thread error: {e}")
-                    return (None, "", {})
-
-            # ── Step helpers for _process_one_question_inner ──────────────
-            # Each step is a local function that accesses client/db/_debug/
-            # display_name/retriever/tracker via closure, and takes only the
-            # QA-specific arguments needed.
-
-            def _step_summarize_retrieve(qa, wmap, extopics):
-                """Flash summary + dual-channel retrieval → top_similar list."""
-                qn = qa.question_number
-                t0 = time.time()
-                summary, step0_topic = _generate_summary(
-                    qa.question_text, qa.answer_text, client, _debug,
-                    existing_topics=extopics)
-                db.log_api_call("summary", "flash", display_name, qn,
-                                int((time.time()-t0)*1000), success=True,
-                                output_size=len(summary))
-                tracker.step("")
-
-                # Layer 2 dual-channel retrieval (embedding + structure + behavior)
-                all_similar = retriever.search_dual_channel(
-                    summary, threshold=RETRIEVAL_THRESHOLD, min_k=RETRIEVAL_MIN_K,
-                    max_cap=RETRIEVAL_MAX_CAP, query_topic=step0_topic)
-
-                # Filter to top-4 by Beta weight for Pro context (reduces input tokens ~70%)
-                top_similar = sorted(
-                    all_similar,
-                    key=lambda qa_ref: wmap.get(qa_ref["id"], {}).get("mean", 0.5),
-                    reverse=True,
-                )[:4]
-
-                # Phase 3: Include stable KP text as additional reference material
-                stable_kps = db.get_stable_topics()
-                if stable_kps:
-                    kp_refs = [{
-                        "id": -1,
-                        "question_text": f"[KP] {kp['kp_concept']}",
-                        "answer_text": kp["kp_detail"] or kp["kp_concept"],
-                        "topic": kp.get("name", ""),
-                        "_score": kp.get("stability", 0.8),
-                        "_is_kp": True,
-                    } for kp in stable_kps[:3]]
-                    top_similar = top_similar[:4] + kp_refs
-
-                return summary, step0_topic, top_similar, all_similar
-
-            def _step_answer_and_grade(qa, top_similar, step0_topic):
-                """Round 1: Flash answers + Round 2: Flash grades → feedback data."""
-                qn = qa.question_number
-                # Round 1: Flash answers (cheaper than Pro, richer miss signal for difficulty)
-                t0 = time.time()
-                r1_ok = True
-                try:
-                    messages = _build_answer_prompt(qa.question_text, top_similar)
-                    result = call_flash(client, messages, max_retries=1, debug_callback=_debug)
-                except Exception as e:
-                    _debug(f"  Q{qn} Round1 failed: {e}")
-                    result = {"answer": "", "used_qa_indices": []}
-                    r1_ok = False
-                db.log_api_call("answer", "flash", display_name, qn,
-                                int((time.time()-t0)*1000), success=r1_ok,
-                                output_size=len(result.get("answer","")))
-                tracker.step("")
-
-                used_indices = result.get("used_qa_indices", [])
-                used_ids = set()
-                for idx in used_indices:
-                    if isinstance(idx, (int, float)) and 1 <= int(idx) <= len(top_similar):
-                        qa_ref = top_similar[int(idx) - 1]
-                        if not qa_ref.get("_is_kp"):
-                            db.record_attempt(qa_ref["id"], success=True)
-                            used_ids.add(qa_ref["id"])
-                for qa_ref in top_similar:
-                    if qa_ref.get("_is_kp"):
-                        continue  # KP entries are not QAs, skip weight recording
-                    if qa_ref["id"] not in used_ids:
-                        ref_topic = qa_ref.get("topic", "")
-                        reason = ("topic_mismatch" if (ref_topic and step0_topic
-                                  and ref_topic != step0_topic) else "retrieval_irrelevant")
-                        db.record_attempt(qa_ref["id"], success=False, reason=reason)
-
-                # Round 2: Flash grades
-                t0 = time.time()
-                r2_ok = True
-                r2_topic = ""
-                grade = ""
-                covered, missed_raw = [], []
-                try:
-                    grade_msgs = _build_grade_prompt(
-                        qa.question_text, result.get("answer",""), qa.answer_text)
-                    grade = call_flash(client, grade_msgs, max_retries=1, debug_callback=_debug)
-                    if isinstance(grade, dict):
-                        r2_topic = grade.get("topic", "")
-                        covered = grade.get("covered_points", [])
-                        missed_raw = grade.get("missed_points", [])
-                    else:
-                        r2_ok = False
-                except Exception as e:
-                    _debug(f"  Q{qn} Round2 failed: {e}")
-                    r2_ok = False
-
-                missed_texts, miss_cats_json = _parse_missed_points(missed_raw)
-                db.log_api_call("grade", "flash", display_name, qn,
-                                int((time.time()-t0)*1000), success=r2_ok,
-                                output_size=len(str(grade)))
-                tracker.step("")
-                return used_indices, used_ids, covered, missed_texts, miss_cats_json, r2_topic
-
-            def _step_insert_and_feedback(qa, summary, step0_topic, r2_topic,
-                                          all_similar, top_similar, used_indices,
-                                          covered, missed_texts, miss_cats_json):
-                """DB insert + feedback + cross-topic ref collection."""
-                topic = r2_topic or step0_topic
-                cross_refs = {}
-                for idx in used_indices:
-                    if isinstance(idx, (int, float)) and 1 <= int(idx) <= len(top_similar):
-                        ref_topic = top_similar[int(idx) - 1].get("topic", "")
-                        if ref_topic and ref_topic != topic:
-                            key = (topic, ref_topic)
-                            cross_refs[key] = cross_refs.get(key, 0) + 1
-
-                qa_id = db.insert(question_text=qa.question_text, answer_text=qa.answer_text,
-                                  knowledge_summary=summary, topic=topic,
-                                  paper=display_name, question_number=qa.question_number,
-                                  parent_question=qa.parent_question)
-                db.record_attempt(qa_id, success=True)
-                db.log_question_feedback(
-                    qa_id=qa_id, retrieval_count=len(all_similar),
-                    used_qa_count=len(used_indices),
-                    step0_topic=step0_topic, round2_topic=r2_topic,
-                    covered_count=len(covered), missed_count=len(missed_texts),
-                    missed_text="\n".join(missed_texts) if missed_texts else "",
-                    miss_categories=miss_cats_json)
-                return qa_id, topic, cross_refs
-
-            def _step_fragment_and_kp(qa, qa_id, topic, used_ids, covered, missed_texts):
-                """Extract MS fragments + LLM KP classification + behavior recording."""
-                try:
-                    fragments = _extract_ms_fragments(
-                        qa.answer_text, qa_id, client, _debug)
-                    if fragments:
-                        db.insert_fragments_batch(fragments)
-                        topic_id = make_topic_id(topic)
-                        db.upsert_dynamic_topic(
-                            topic_id, name=topic, quality="embryonic")
-                        for frag in fragments:
-                            db.set_fragment_membership(
-                                frag["point_id"], topic_id, loyalty=0.5)
-
-                    # Layer 1: LLM KP classification (only when KPs exist, i.e. Phase 2+)
-                    kps = db.get_all_kps()
-                    if kps:
-                        kp_concepts = [{"id": k["id"], "concept": k.get("core_concept", k.get("name", "")),
-                                        "evidence": k.get("evidence_count", 0)} for k in kps]
-                        kp_scores = _classify_qa_against_kps(
-                            qa.question_text, qa.answer_text, kp_concepts, client, _debug)
-                        if kp_scores:
-                            _place_qa_vector_from_kp_scores(db, qa_id, kp_scores, _debug)
-
-                    # Record behavior: fragments from used QAs helped this question
-                    _record_fragment_help(used_ids, covered, missed_texts, db, qa_id)
-                except Exception as e:
-                    _debug(f"  fragment extraction failed for Q{qa.question_number}: {e}")
-
-            def _process_one_question_inner(qa, wmap, extopics):
-                """Orchestrate the 4-step Phase 2 processing for a single question."""
-                qn = qa.question_number
-
-                # Step 0: Summarise + retrieve similar QAs
-                summary, step0_topic, top_similar, all_similar = \
-                    _step_summarize_retrieve(qa, wmap, extopics)
-
-                # Step 1: Answer + grade via Flash
-                used_indices, used_ids, covered, missed_texts, miss_cats_json, r2_topic = \
-                    _step_answer_and_grade(qa, top_similar, step0_topic)
-
-                # Step 2: Insert QA + feedback into DB
-                qa_id, topic, cross_refs = _step_insert_and_feedback(
-                    qa, summary, step0_topic, r2_topic,
-                    all_similar, top_similar, used_indices,
-                    covered, missed_texts, miss_cats_json)
-
-                # Step 3: Fragment extraction + KP classification
-                _step_fragment_and_kp(qa, qa_id, topic, used_ids, covered, missed_texts)
-
-                _debug(f"  Q{qn}: retrieved={len(all_similar)}, shown={len(top_similar)}, "
-                       f"used={len(used_indices)}, topic={topic}, "
-                       f"covered={len(covered)}, missed={len(missed_texts)}")
-                return (qa_id, summary, cross_refs)
+            _p2_processor = partial(_process_one_question_inner,
+                                      client=client, db=db, debug=_debug,
+                                      display_name=display_name,
+                                      retriever=retriever, tracker=tracker)
 
             tracker.step("QA pairing")  # Stage 2 complete
             qa_results = []
             with ThreadPoolExecutor(max_workers=get_worker_limit(len(qa_pairs))) as executor:
-                futures = {executor.submit(_process_one_question, qa): qa for qa in qa_pairs}
+                futures = {executor.submit(_p2_processor, qa, weight_map, existing_topics): qa
+                           for qa in qa_pairs}
                 for future in as_completed(futures):
                     try:
                         qa_id, summary, cross_refs = future.result()
