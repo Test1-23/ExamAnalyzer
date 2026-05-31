@@ -293,8 +293,8 @@ def generate_kps(db: QADatabase, clustering: dict, client, debug_cb=None) -> lis
             result = call_flash(client, messages, max_retries=1, debug_callback=debug_cb)
             groups = result.get("groups", []) if isinstance(result, dict) else []
         except Exception as e:
-            if debug_cb:
-                debug_cb(f"  KP naming batch failed: {e}")
+            from .error_utils import log_exception
+            log_exception(debug_cb, "KP naming", "batch", e)
             groups = []
 
         # Fallback: auto-name clusters that Flash failed to name
@@ -358,8 +358,8 @@ def generate_kps(db: QADatabase, clustering: dict, client, debug_cb=None) -> lis
             try:
                 kp_ids.extend(future.result())
             except Exception as e:
-                if debug_cb:
-                    debug_cb(f"  KP naming batch failed: {e}")
+                from .error_utils import log_exception
+                log_exception(debug_cb, "KP naming", "batch_thread", e)
 
     if debug_cb:
         total_clusters = len(clusters)

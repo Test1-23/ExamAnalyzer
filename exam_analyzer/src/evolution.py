@@ -21,13 +21,15 @@ def run_evolution_cycle(db: QADatabase, client, debug) -> None:
         if result.get("migrated", 0) > 0:
             debug(f"Evolution: {result['migrated']} fragments migrated")
     except Exception as e:
-        debug(f"  Phase 2 cycle failed (non-fatal): {e}")
+        from .error_utils import log_exception
+        log_exception(debug, "Phase2 cycle", "", e)
 
     # Generate KP for stable/forming topics
     try:
         _generate_kp_for_stable_topics(db, client, debug)
     except Exception as e:
-        debug(f"  KP generation for stable topics failed (non-fatal): {e}")
+        from .error_utils import log_exception
+        log_exception(debug, "KP generation", "stable_topics", e)
 
     kps = db.conn.execute("SELECT * FROM knowledge_points").fetchall()
     if not kps:
@@ -68,7 +70,8 @@ def run_evolution_cycle(db: QADatabase, client, debug) -> None:
                         outcome="completed",
                     )
                 except Exception as e:
-                    debug(f"  Evolution re-review failed for {kp_id}: {e}")
+                    from .error_utils import log_exception
+                    log_exception(debug, "Evolution re-review", f"kp={kp_id}", e)
 
     # Detect KPs with QA growth since last review
     for kp in kps:
@@ -104,7 +107,8 @@ def run_evolution_cycle(db: QADatabase, client, debug) -> None:
     try:
         apply_student_feedback(db)
     except Exception as e:
-        debug(f"  Student feedback loop failed (non-fatal): {e}")
+        from .error_utils import log_exception
+        log_exception(debug, "Student feedback", "", e)
 
     # Detect outlier QAs
     try:
@@ -112,7 +116,8 @@ def run_evolution_cycle(db: QADatabase, client, debug) -> None:
         if outlier_count:
             debug(f"Evolution: {outlier_count} outlier QAs flagged for review")
     except Exception as e:
-        debug(f"  Outlier detection failed (non-fatal): {e}")
+        from .error_utils import log_exception
+        log_exception(debug, "Outlier detection", "", e)
 
 
 def _generate_kp_for_stable_topics(db: QADatabase, client, debug) -> None:
@@ -163,7 +168,8 @@ def _generate_kp_for_stable_topics(db: QADatabase, client, debug) -> None:
             concept = result.get("concept", topic["name"]) if isinstance(result, dict) else topic["name"]
             detail = result.get("detail", "") if isinstance(result, dict) else ""
         except Exception as e:
-            debug(f"  KP generation failed for {topic_id}: {e}")
+            from .error_utils import log_exception
+            log_exception(debug, "KP generation", f"topic={topic_id}", e)
             concept = topic["name"] + "[auto]"
             detail = ""
 
@@ -196,7 +202,8 @@ def _detect_outlier_qas(db: QADatabase, debug) -> int:
             vecs = model.encode(answer_texts, normalize_embeddings=True,
                                convert_to_numpy=True, show_progress_bar=False)
         except Exception as e:
-            debug(f"outlier embedding for topic '{topic}': {e}")
+            from .error_utils import log_exception
+            log_exception(debug, "Outlier embedding", f"topic={topic}", e)
             continue
 
         centroid = np.mean(vecs, axis=0)

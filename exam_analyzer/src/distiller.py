@@ -41,7 +41,8 @@ def _build_missed_ref(db: QADatabase, topic: str, qas: list[dict], debug) -> str
         missed_vecs = model.encode(raw_missed, normalize_embeddings=True, convert_to_numpy=True)
         answer_vecs = model.encode(all_answers, normalize_embeddings=True, convert_to_numpy=True)
     except Exception as e:
-        debug(f"  missed embedding failed for '{topic}': {e}")
+        from .error_utils import log_exception
+        log_exception(debug, "Missed embedding", f"topic={topic}", e)
         return ""
 
     filtered = []
@@ -56,7 +57,8 @@ def _build_missed_ref(db: QADatabase, topic: str, qas: list[dict], debug) -> str
     try:
         fvecs = model.encode(filtered, normalize_embeddings=True, convert_to_numpy=True)
     except Exception as e:
-        debug(f"  missed cluster encoding failed for '{topic}': {e}")
+        from .error_utils import log_exception
+        log_exception(debug, "Missed cluster encoding", f"topic={topic}", e)
         return ""
     groups = cluster_by_cosine(fvecs, MISSED_CLUSTER_THRESHOLD, min_group_size=2)
     patterns = [filtered[g[0]] for g in groups]
@@ -160,8 +162,9 @@ class Distiller:
                             if text:
                                 results[topic] = text
                     except Exception as e:
+                        from .error_utils import log_exception
                         _, topics_in_task = future_map.get(future, ("unknown", []))
-                        self._debug(f"  distillation thread failed for {topics_in_task}: {e}")
+                        log_exception(self._debug, "Distillation thread", f"topics={topics_in_task}", e)
 
             # Fallback: small topics missed by batch get individual distillation
             missed_small = [t for t in small_topics if t[0] not in results]
@@ -173,7 +176,8 @@ class Distiller:
                         if text:
                             results[topic] = text
                     except Exception as e:
-                        self._debug(f"  fallback distillation failed for '{item[0]}': {e}")
+                        from .error_utils import log_exception
+                        log_exception(self._debug, "Fallback distillation", f"topic={item[0]}", e)
 
         # Assemble output in original topic order
         all_lines = []
@@ -397,7 +401,8 @@ class Distiller:
             result = call_flash(self._client, messages, max_retries=1, debug_callback=self._debug)
             kps = result.get("knowledge_points", [])
         except Exception as e:
-            self._debug(f"  distillation failed for '{topic}': {e}")
+            from .error_utils import log_exception
+            log_exception(self._debug, "Distillation", f"topic={topic}", e)
             kps = []
 
         if not kps:
@@ -456,7 +461,8 @@ class Distiller:
             result = call_flash(self._client, messages, max_retries=1, debug_callback=self._debug)
             flash_result = result.get("topics", [])
         except Exception as e:
-            self._debug(f"  batch distillation failed: {e}")
+            from .error_utils import log_exception
+            log_exception(self._debug, "Batch distillation", "", e)
             flash_result = []
 
         batch_results: dict[str, str] = {}

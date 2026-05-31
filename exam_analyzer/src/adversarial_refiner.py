@@ -131,8 +131,8 @@ def refine_kp(db: QADatabase, kp_id: str, client, debug_cb=None) -> dict:
             chal_result = call_flash(client, chal_msgs, max_retries=1, debug_callback=debug_cb)
             chal_result = chal_result if isinstance(chal_result, dict) else {}
         except Exception as e:
-            if debug_cb:
-                debug_cb(f"  Challenger R{round_num} failed for {kp_id}: {e}")
+            from .error_utils import log_exception
+            log_exception(debug_cb, "KP refine", f"challenger,kp={kp_id},round={round_num}", e)
             break
 
         if chal_result.get("pass"):
@@ -153,8 +153,8 @@ def refine_kp(db: QADatabase, kp_id: str, client, debug_cb=None) -> dict:
             def_result = call_flash(client, def_msgs, max_retries=1, debug_callback=debug_cb)
             def_result = def_result if isinstance(def_result, dict) else {}
         except Exception as e:
-            if debug_cb:
-                debug_cb(f"  Defender R{round_num} failed for {kp_id}: {e}")
+            from .error_utils import log_exception
+            log_exception(debug_cb, "KP refine", f"defender,kp={kp_id},round={round_num}", e)
             break
 
         if def_result.get("revised_concept"):
@@ -253,8 +253,8 @@ def cross_kp_consistency(db: QADatabase, kp_ids: list[str], client, debug_cb=Non
             result = call_flash(client, messages, max_retries=1, debug_callback=debug_cb)
             return result.get("issues", []) if isinstance(result, dict) else []
         except Exception as e:
-            if debug_cb:
-                debug_cb(f"  Cross-KP consistency check failed: {e}")
+            from .error_utils import log_exception
+            log_exception(debug_cb, "KP consistency", "", e)
             return []
 
     all_issues = []
@@ -267,8 +267,8 @@ def cross_kp_consistency(db: QADatabase, kp_ids: list[str], client, debug_cb=Non
                 try:
                     all_issues.extend(future.result())
                 except Exception as e:
-                    if debug_cb:
-                        debug_cb(f"  Consistency thread failed: {e}")
+                    from .error_utils import log_exception
+                    log_exception(debug_cb, "KP consistency", "thread", e)
 
     if debug_cb:
         debug_cb(f"  Cross-KP consistency: {len(all_issues)} issues across {len(kp_ids)} KPs "
@@ -343,8 +343,8 @@ def auto_split_kp(db: QADatabase, kp_id: str, client, debug_cb=None) -> list[str
     try:
         result = call_flash(client, messages, max_retries=1, debug_callback=debug_cb)
     except Exception as e:
-        if debug_cb:
-            debug_cb(f"  Auto-split failed for {kp_id}: {e}")
+        from .error_utils import log_exception
+        log_exception(debug_cb, "Auto-split KP", f"kp={kp_id}", e)
         return []
 
     if not isinstance(result, dict) or not result.get("split"):
