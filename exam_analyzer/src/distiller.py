@@ -28,7 +28,7 @@ def _build_missed_ref(db: QADatabase, topic: str, qas: list[dict], debug) -> str
 
     Only returns patterns that pass MS similarity filter and appear >= 2 times.
     """
-    raw_missed = db.get_missed_by_topic(topic)
+    raw_missed = db.analysis.get_missed_by_topic(topic)
     if len(raw_missed) < 3:
         return ""
 

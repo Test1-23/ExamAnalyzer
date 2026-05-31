@@ -94,7 +94,7 @@ def merge_similar_topics(db: QADatabase, client, debug) -> None:
 
         merged_count = 0
         for old_topic, canonical in flat_mergers.items():
-            merged_count += db.rename_topic(canonical, old_topic)
+            merged_count += db.qa.rename_topic(canonical, old_topic)
 
         all_links = db.conn.execute(
             "SELECT src_topic, dst_topic, count FROM topic_links"

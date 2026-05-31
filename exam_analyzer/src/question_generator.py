@@ -15,7 +15,7 @@ _log = get_logger()
 
 def extract_template(db: QADatabase, kp_id: str, client, debug_cb=None) -> dict:
     """Extract a question template from a KP's representative QA."""
-    qas = db.get_kp_representative_qas(kp_id, limit=1)
+    qas = db.kp.get_representative_qas(kp_id, limit=1)
     if not qas:
         return {}
 
@@ -116,7 +116,7 @@ def _generate_param_value(param: dict, difficulty: str) -> str:
 
 def generate_answer(question: str, kp_id: str, db: QADatabase, client, debug_cb=None) -> dict:
     """Generate and validate an answer for a generated question."""
-    qas = db.get_kp_representative_qas(kp_id, limit=3)
+    qas = db.kp.get_representative_qas(kp_id, limit=3)
     if not qas:
         return {"answer": "", "validated": False}
 

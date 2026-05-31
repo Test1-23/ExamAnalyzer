@@ -65,10 +65,10 @@ def agent_suggest(question: str, answer: str, similar: list[dict[str, Any]], lan
     prereq_hint = ""
     if db and topics and session_id:
         try:
-            knowledge = db.get_knowledge_state(session_id)
+            knowledge = db.student.get_knowledge_state(session_id)
             all_prereqs = set()
             for t in topics[:2]:
-                for pr in db.get_direct_prerequisites(t):
+                for pr in db.analysis.get_direct_prerequisites(t):
                     pre_topic = pr["prerequisite"]
                     if pre_topic not in knowledge or knowledge[pre_topic] != "mastered":
                         all_prereqs.add(pre_topic)

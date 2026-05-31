@@ -109,7 +109,7 @@ def build_analysis_context(db, topics: list[str], student_verb: str, student_id:
 
     # 1. Topic difficulty
     try:
-        difficulties = db.get_topic_difficulty()
+        difficulties = db.topic.get_difficulty()
         diff_map = {d["topic"]: d for d in difficulties}
         for t in topics[:2]:
             if t in diff_map:
@@ -134,9 +134,9 @@ def build_analysis_context(db, topics: list[str], student_verb: str, student_id:
 
     # 3. Prerequisites
     try:
-        knowledge = db.get_knowledge_state(student_id)
+        knowledge = db.student.get_knowledge_state(student_id)
         for t in topics[:2]:
-            prereqs = db.get_direct_prerequisites(t)
+            prereqs = db.analysis.get_direct_prerequisites(t)
             for pr in prereqs:
                 pre_topic = pr["prerequisite"]
                 if pre_topic not in knowledge or knowledge[pre_topic] != "mastered":
@@ -149,7 +149,7 @@ def build_analysis_context(db, topics: list[str], student_verb: str, student_id:
 
     # 4. Student confusion history
     try:
-        confusions = db.get_student_confusions(student_id)
+        confusions = db.student.get_confusions(student_id)
         confused_topics = {c["topic"] for c in confusions[:10] if not c.get("resolved")}
         relevant_confusions = confused_topics & set(topics)
         if relevant_confusions:
