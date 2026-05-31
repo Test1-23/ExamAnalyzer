@@ -134,7 +134,8 @@ def _phase1_difficulty_benchmark(db, qas, client, debug_cb):
             result = call_flash(client, messages, max_retries=1, debug_callback=debug_cb)
             ratings = result.get("ratings", []) if isinstance(result, dict) else []
         except Exception as e:
-            debug_cb(f"  Difficulty benchmark batch failed: {e}")
+            from ..error_utils import log_exception
+            log_exception(debug_cb, "Difficulty benchmark", f"batch={b}", e)
             ratings = []
 
         for r in ratings:
@@ -360,7 +361,8 @@ def _phase3_classify_and_confirm(db, qas, boundaries, client, verb_data, debug_c
                 result = call_flash(client, messages, max_retries=1, debug_callback=debug_cb)
                 ratings = result.get("ratings", []) if isinstance(result, dict) else []
             except Exception as e:
-                debug_cb(f"  Boundary difficulty batch failed: {e}")
+                from ..error_utils import log_exception
+                log_exception(debug_cb, "Boundary difficulty", f"batch={b}", e)
                 ratings = []
 
             with db.transaction():

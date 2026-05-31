@@ -113,7 +113,8 @@ def _phase0_generate_candidates(db, debug_cb):
             vecs = model.encode(texts, normalize_embeddings=True, convert_to_numpy=True)
             cos_matrix = vecs @ vecs.T
         except Exception as e:
-            debug_cb(f"  Topic embedding failed: {e}")
+            from ..error_utils import log_exception
+            log_exception(debug_cb, "Topic embedding", "", e)
             cos_matrix = None
 
         if cos_matrix is not None:
@@ -169,7 +170,8 @@ def _phase1_validate_candidates(db, candidates, client, debug_cb):
             result = call_flash(client, messages, max_retries=1, debug_callback=debug_cb)
             pairs = result.get("pairs", []) if isinstance(result, dict) else []
         except Exception as e:
-            debug_cb(f"  Dependency validation batch failed: {e}")
+            from ..error_utils import log_exception
+            log_exception(debug_cb, "Dependency validation", f"batch={b}", e)
             return []
 
         batch_results = []
@@ -203,7 +205,8 @@ def _phase1_validate_candidates(db, candidates, client, debug_cb):
                 try:
                     validated.extend(future.result())
                 except Exception as e:
-                    debug_cb(f"  Dependency validation thread failed: {e}")
+                    from ..error_utils import log_exception
+                    log_exception(debug_cb, "Dependency validation", f"thread", e)
 
     debug_cb(f"  Flash validated: {len(validated)} dependencies (from {len(candidates)} candidates, {len(batches)} batches parallel)")
     return validated

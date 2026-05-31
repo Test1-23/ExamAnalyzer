@@ -114,7 +114,8 @@ def _phase1_extract_verbs(qas, db, client, debug_cb, progress_cb):
             result = call_flash(client, messages, max_retries=1, debug_callback=debug_cb)
             verb_list = result.get("verbs", []) if isinstance(result, dict) else []
         except Exception as e:
-            debug_cb(f"  Verb extraction batch failed: {e}")
+            from ..error_utils import log_exception
+            log_exception(debug_cb, "Verb extraction", f"batch={b}", e)
             verb_list = []
             flash_ok = False
 
@@ -146,7 +147,8 @@ def _phase1_extract_verbs(qas, db, client, debug_cb, progress_cb):
                 try:
                     future.result()
                 except Exception as e:
-                    debug_cb(f"  Verb extraction thread failed: {e}")
+                    from ..error_utils import log_exception
+                    log_exception(debug_cb, "Verb extraction", f"thread", e)
 
     if progress_cb:
         progress_cb(100, "Verb extraction complete")
@@ -261,7 +263,8 @@ def _phase3_summarize_patterns(verb_groups, verb_stats, db, client, debug_cb):
             result = call_flash(client, messages, max_retries=1, debug_callback=debug_cb)
             summary = result.get("pattern_summary", "") if isinstance(result, dict) else ""
         except Exception as e:
-            debug_cb(f"  Pattern summary failed for '{verb}': {e}")
+            from ..error_utils import log_exception
+            log_exception(debug_cb, "Pattern summary", f"verb={verb}", e)
             return None
 
         # Topic-level variance
@@ -304,7 +307,8 @@ def _phase3_summarize_patterns(verb_groups, verb_stats, db, client, debug_cb):
             try:
                 future.result()
             except Exception as e:
-                debug_cb(f"  Verb pattern thread failed: {e}")
+                from ..error_utils import log_exception
+                log_exception(debug_cb, "Verb pattern", f"thread", e)
 
 
 def _phase4_assign_families(db):

@@ -50,7 +50,8 @@ def _write_verb_report(db: QADatabase, output_dir: str, subject_code: str):
                 for topic, note in tsp.items():
                     lines.append(f"    [{topic}] {note}")
             except Exception as e:
-                _log.warning(f"verb pattern JSON parse: {e}")
+                from ..error_utils import log_exception
+                log_exception(_log, "Report JSON parse", "verb_pattern", e, level="warning")
         lines.append("")
 
     with open(out_path, "w", encoding="utf-8") as f:
