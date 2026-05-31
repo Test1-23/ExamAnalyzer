@@ -171,7 +171,7 @@ class TestPipelineFunctions:
     def test_phase1_worker_inserts_qa_and_fragments(
         self, mock_db, mock_tracker, monkeypatch):
         """_phase1_worker → QA inserted + fragments assigned to topic."""
-        from src.pipeline import _phase1_worker
+        from src.pipeline import _phase1_worker, PipelineContext
 
         monkeypatch.setattr(
             "src.pipeline._generate_summary",
@@ -188,10 +188,10 @@ class TestPipelineFunctions:
             "question_number": "1", "parent_question": "",
         })()
 
-        qa_id = _phase1_worker(
-            qa, client=None, db=mock_db, debug=print,
-            display_name="test_paper", existing_topics=None,
-            tracker=mock_tracker)
+        ctx = PipelineContext(client=None, db=mock_db, debug=print,
+                               display_name="test_paper", retriever=None,
+                               tracker=mock_tracker)
+        qa_id = _phase1_worker(qa, existing_topics=None, ctx=ctx)
 
         assert qa_id > 0
         qa_row = mock_db.get(qa_id)
@@ -204,7 +204,7 @@ class TestPipelineFunctions:
     def test_step_summarize_retrieve_top4_and_kp_refs(
         self, mock_db, mock_tracker, monkeypatch):
         """_step_summarize_retrieve → top-4 + KP refs appended."""
-        from src.pipeline import _step_summarize_retrieve
+        from src.pipeline import _step_summarize_retrieve, PipelineContext
 
         for i in range(8):
             mock_db.qa.insert(f"Q{i}", f"A{i}", topic=f"T{i}")
@@ -224,10 +224,11 @@ class TestPipelineFunctions:
             "question_text": "Q", "answer_text": "A", "question_number": "1"})()
         wmap = {i: {"mean": 0.8} for i in range(1, 9)}
 
+        ctx = PipelineContext(client=None, db=mock_db, debug=print,
+                               display_name="test", retriever=retriever,
+                               tracker=mock_tracker)
         summary, step0_topic, top_similar, all_similar = \
-            _step_summarize_retrieve(
-                qa, wmap, [], None, mock_db, print, "test",
-                retriever, mock_tracker)
+            _step_summarize_retrieve(qa, wmap, [], ctx)
 
         assert summary == "Summary"
         assert step0_topic == "T0"
@@ -239,7 +240,7 @@ class TestPipelineFunctions:
     def test_step_answer_and_grade_parses_covered_missed(
         self, mock_db, mock_flash, mock_tracker):
         """_step_answer_and_grade → covered/missed from mock Flash answer+grade."""
-        from src.pipeline import _step_answer_and_grade
+        from src.pipeline import _step_answer_and_grade, PipelineContext
 
         # The answer prompt contains "Past Q" keywords that are unique to it.
         mock_flash.register("Past Q", {
@@ -257,9 +258,11 @@ class TestPipelineFunctions:
             "question_text": "Q", "answer_text": "A", "question_number": "1"})()
         top_similar = [{"id": 1, "topic": "Binary", "question_text": "Q1", "answer_text": "A1"}]
 
+        ctx = PipelineContext(client=None, db=mock_db, debug=print,
+                               display_name="test", retriever=None,
+                               tracker=mock_tracker)
         used_indices, used_ids, covered, missed_texts, miss_cats_json, r2_topic = \
-            _step_answer_and_grade(
-                qa, top_similar, "Binary", None, mock_db, print, "test", mock_tracker)
+            _step_answer_and_grade(qa, top_similar, "Binary", ctx)
 
         assert used_indices == [1]
         assert 1 in used_ids
@@ -271,20 +274,21 @@ class TestPipelineFunctions:
 
     def test_step_insert_and_feedback_creates_qa(self, mock_db, mock_tracker):
         """_step_insert_and_feedback → QA inserted + feedback logged."""
-        from src.pipeline import _step_insert_and_feedback
+        from src.pipeline import _step_insert_and_feedback, PipelineContext
 
         qa = type("QA", (), {
             "question_text": "Q", "answer_text": "A",
             "question_number": "1", "parent_question": "",
         })()
 
+        ctx = PipelineContext(client=None, db=mock_db, debug=print,
+                               display_name="test", retriever=None,
+                               tracker=mock_tracker)
         qa_id, topic, cross_refs = _step_insert_and_feedback(
             qa, "summary", "T0", "T1",
             all_similar=[{"id": 1}], top_similar=[{"id": 1, "topic": "T1"}],
             used_indices=[1], covered=["c"], missed_texts=["m"],
-            miss_cats_json='{"cat":"x"}',
-            db=mock_db, debug=print, tracker=mock_tracker,
-            display_name="test")
+            miss_cats_json='{"cat":"x"}', ctx=ctx)
 
         assert qa_id > 0
         assert topic == "T1"
@@ -296,7 +300,7 @@ class TestPipelineFunctions:
     def test_step_fragment_and_kp_extracts_and_classifies(
         self, mock_db, mock_tracker, monkeypatch):
         """_step_fragment_and_kp → fragments inserted + KP classified."""
-        from src.pipeline import _step_fragment_and_kp
+        from src.pipeline import _step_fragment_and_kp, PipelineContext
         from src.models import KPSpec
 
         mock_db.kp.upsert(KPSpec(
@@ -320,9 +324,11 @@ class TestPipelineFunctions:
 
         qa = type("QA", (), {
             "question_text": "Q", "answer_text": "A", "question_number": "1"})()
+        ctx = PipelineContext(client=None, db=mock_db, debug=print,
+                               display_name="test", retriever=None,
+                               tracker=mock_tracker)
         _step_fragment_and_kp(
-            qa, 1, "T0", {1}, ["c"], ["m"],
-            None, mock_db, print, mock_tracker)
+            qa, 1, "T0", {1}, ["c"], ["m"], ctx)
 
         mock_tracker.step.assert_called()
 
@@ -331,7 +337,7 @@ class TestPipelineFunctions:
     def test_process_one_question_inner_orchestrates_4_steps(
         self, mock_db, mock_tracker, monkeypatch):
         """_process_one_question_inner → orchestrates 4 steps, returns qa_id."""
-        from src.pipeline import _process_one_question_inner
+        from src.pipeline import _process_one_question_inner, PipelineContext
 
         monkeypatch.setattr(
             "src.pipeline._step_summarize_retrieve",
@@ -353,8 +359,11 @@ class TestPipelineFunctions:
             "question_text": "Q", "answer_text": "A", "question_number": "1"})()
         wmap = {1: {"mean": 0.8}}
 
+        ctx = PipelineContext(client=None, db=mock_db, debug=print,
+                               display_name="test", retriever=None,
+                               tracker=mock_tracker)
         qa_id, summary, cross_refs = _process_one_question_inner(
-            qa, wmap, [], None, mock_db, print, "test", None, mock_tracker)
+            qa, wmap, [], ctx)
 
         assert qa_id == 99
         assert summary == "summary"
