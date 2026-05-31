@@ -146,3 +146,15 @@ def mock_embedding(monkeypatch):
             pass
     monkeypatch.setattr("src.embedding_cluster._get_model", lambda name, model=model: model)
     return model
+
+
+# ═══════════════════════════════════════════════════════════════
+# ProgressTracker mock
+# ═══════════════════════════════════════════════════════════════
+
+
+@pytest.fixture
+def mock_tracker():
+    """Fake ProgressTracker that records step/set_status calls for assertions."""
+    from unittest.mock import MagicMock
+    return MagicMock()
