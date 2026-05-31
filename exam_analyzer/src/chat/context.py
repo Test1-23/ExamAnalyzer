@@ -7,8 +7,13 @@ from ..logger import get_logger
 _log = get_logger()
 
 
-def load_kp_from_db(db) -> list[dict]:
-    """Read KP data from DB: Dynamic_Topics (priority) + qa_pairs (fallback)."""
+def load_kp_from_db(db, qa_rows=None) -> list[dict]:
+    """Read KP data from DB: Dynamic_Topics (priority) + qa_pairs (fallback).
+
+    If *qa_rows* is provided (pre-loaded from retriever.rebuild()), the
+    ``db.qa.get_all()`` scan is skipped — eliminating a redundant full-table
+    read during chat warmup.
+    """
     kps = []
     try:
         dt_rows = db.topic.get_stable_kps()
@@ -25,7 +30,7 @@ def load_kp_from_db(db) -> list[dict]:
         _log.debug("Failed to load KPs from dynamic_topics", exc_info=True)
 
     try:
-        rows = db.qa.get_all()
+        rows = qa_rows if qa_rows is not None else db.qa.get_all()
         # Filter and sort like the original query: exclude empty/uncategorized, sort by representative
         rows = [r for r in rows if r.get("topic") and r["topic"] != "(uncategorized)"]
         rows.sort(key=lambda r: (-int(r.get("is_representative", 0)), -int(r.get("success_count", 0))))
@@ -49,10 +54,10 @@ def load_kp_from_db(db) -> list[dict]:
     return kps
 
 
-def load_kp_cache(db=None, points_file: str = "") -> list[dict]:
+def load_kp_cache(db=None, points_file: str = "", qa_rows=None) -> list[dict]:
     """Load KP cache: DB first (structured), points.txt fallback (parsed)."""
     if db:
-        kps = load_kp_from_db(db)
+        kps = load_kp_from_db(db, qa_rows=qa_rows)
         if kps:
             return kps
 

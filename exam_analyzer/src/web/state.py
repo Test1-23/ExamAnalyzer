@@ -119,20 +119,20 @@ def get_chat_retriever():
         from src.knowledge_base import QADatabase, QARetriever
         db = QADatabase(db_path)
         retriever = QARetriever(db)
-        retriever.rebuild()
+        qa_rows = retriever.rebuild()
         _chat_retriever = retriever
         _chat_retriever_db_path = db_path
-        _load_kp_cache_into_global(db, find_points_file())
+        _load_kp_cache_into_global(db, find_points_file(), qa_rows)
         source = _kp_cache[0].get("source", "DB") if _kp_cache else "DB"
         print(f"[Chat] KP cache loaded: {len(_kp_cache)} entries (source: {source})")
     return retriever
 
 
-def _load_kp_cache_into_global(db, points_file: str):
+def _load_kp_cache_into_global(db, points_file: str, qa_rows=None):
     """Load KP cache and store in module global. Internal helper."""
     global _kp_cache
     from src.chat.context import load_kp_cache
-    _kp_cache = load_kp_cache(db, points_file=points_file)
+    _kp_cache = load_kp_cache(db, points_file=points_file, qa_rows=qa_rows)
 
 
 def warmup_chat_retriever():

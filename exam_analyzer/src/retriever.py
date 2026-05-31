@@ -297,10 +297,16 @@ class QARetriever:
             self._id_map[qa_id] = len(self._embeddings) - 1
 
     def rebuild(self):
+        """Clear and rebuild the embedding index. Returns loaded QA rows.
+
+        Callers can reuse the returned rows to avoid a second full-table scan
+        when building a KP cache or analysis context immediately after rebuild.
+        """
         self._embeddings = None
         self._id_map = {}
         self._embed_model_name = None
         self._ensure_embeddings()
+        return self._db.get_all()
 
     def count(self) -> int:
         """Return the number of QAs in the underlying database."""
