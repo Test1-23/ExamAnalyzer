@@ -201,6 +201,20 @@ class ProgressTracker:
 
 _FILENAME_RE = re.compile(r'^(\d+)_([smw])(\d{2})_(\d+)')
 
+
+def _parse_year(display_name: str) -> int:
+    """Extract sortable year from paper filename.  Unknown → 9999 (sorts last)."""
+    m = _FILENAME_RE.search(display_name)
+    return 2000 + int(m.group(3)) if m else 9999
+
+
+def _get_existing_topics(db) -> list[tuple]:
+    """Return [(topic_name, qa_count), ...] sorted by count desc."""
+    groups = db.get_topic_groups()
+    return [(t, len(qas)) for t, qas in groups.items()
+            if t and t != "(uncategorized)"]
+
+
 def _ensure_session(db, display_name: str) -> Optional[int]:
     """Parse exam paper filename and ensure exam_sessions row exists."""
     m = _FILENAME_RE.match(display_name)
@@ -273,9 +287,6 @@ def run_pipeline(
     pairs = pair_files(input_dir)
 
     # Sort by year ascending: earliest papers first → Phase 1 gets foundational content
-    def _parse_year(display_name):
-        m = _FILENAME_RE.search(display_name)
-        return 2000 + int(m.group(3)) if m else 9999  # 9999 = unknown year, sorts last
     pairs.sort(key=lambda p: _parse_year(p[2]))
 
     # Log processing order
@@ -316,12 +327,6 @@ def run_pipeline(
             _debug(f"Processed files: {len(processed)}")
         except Exception as e:
             _debug(f"Failed to read processed.json: {e}")
-
-    def _get_existing_topics():
-        """Return [(topic_name, qa_count), ...] sorted by count desc."""
-        groups = db.get_topic_groups()
-        return [(t, len(qas)) for t, qas in groups.items()
-                if t and t != "(uncategorized)"]
 
     client = create_client(api_url, api_key)
     is_first = (db.count() == 0)
@@ -366,7 +371,7 @@ def run_pipeline(
         if is_first:
             _debug(f"[{display_name}] Phase1: building KB ({len(qa_pairs)} questions)")
 
-            existing_topics = _get_existing_topics() if db.count() > 0 else None
+            existing_topics = _get_existing_topics(db) if db.count() > 0 else None
 
             def _phase1_worker(qa):
                 t0 = time.time()
@@ -422,7 +427,7 @@ def run_pipeline(
 
             # Pre-load QA weights + existing topics for retrieval-augmented summary
             weight_map = db.get_all_weights()
-            existing_topics = _get_existing_topics() if db.count() > 0 else None
+            existing_topics = _get_existing_topics(db) if db.count() > 0 else None
 
             def _process_one_question(qa):
                 try:
