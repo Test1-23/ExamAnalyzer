@@ -18,8 +18,9 @@ def agent_query_analyst(question: str, lang: str, client: Any) -> dict[str, Any]
     try:
         result = call_flash(client, msgs, max_retries=1)
         return result if isinstance(result, dict) else {"keywords": [], "qtype": "explanation", "verb": ""}
-    except Exception:
-        _log.debug("Query analyst failed", exc_info=True)
+    except Exception as e:
+        from .error_utils import log_exception
+        log_exception(_log, "Query analyst", "", e, level="warning")
         return {"keywords": [], "qtype": "explanation", "verb": ""}
 
 
@@ -32,8 +33,9 @@ def agent_answer_generator(question: str, qtype: str, lang: str, ctx: str,
     try:
         result = call_flash(client, msgs, max_retries=1)
         return result if isinstance(result, dict) else {"answer": str(result)}
-    except Exception:
-        _log.debug("Answer generator failed", exc_info=True)
+    except Exception as e:
+        from .error_utils import log_exception
+        log_exception(_log, "Answer generator", "", e, level="warning")
         return {"answer": ""}
 
 
@@ -49,8 +51,9 @@ def agent_critic(question: str, answer: str, similar: list[dict[str, Any]], lang
     try:
         result = call_flash(client, msgs, max_retries=1)
         return result if isinstance(result, dict) else {"pass": True, "feedback": ""}
-    except Exception:
-        _log.debug("Critic failed", exc_info=True)
+    except Exception as e:
+        from .error_utils import log_exception
+        log_exception(_log, "Critic", "", e, level="warning")
         return {"pass": False, "feedback": "Review unavailable (API error), retrying"}
 
 
@@ -74,13 +77,15 @@ def agent_suggest(question: str, answer: str, similar: list[dict[str, Any]], lan
                         all_prereqs.add(pre_topic)
             if all_prereqs:
                 prereq_hint = f"Prerequisites not yet mastered: {', '.join(all_prereqs)}. Suggest reviewing these.\n"
-        except Exception:
-            _log.debug("Failed to load prerequisites for suggestions", exc_info=True)
+        except Exception as e:
+            from .error_utils import log_exception
+            log_exception(_log, "Suggest prerequisites", "", e, level="warning")
 
     msgs = SUGGEST.build(lang=lang, question=question, topic_str=topic_str, prereq_hint=prereq_hint)
     try:
         result = call_flash(client, msgs, max_retries=1)
         return result.get("suggestions", []) if isinstance(result, dict) else []
-    except Exception:
-        _log.debug("Suggest agent failed", exc_info=True)
+    except Exception as e:
+        from .error_utils import log_exception
+        log_exception(_log, "Suggest agent", "", e, level="warning")
         return []

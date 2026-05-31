@@ -95,7 +95,8 @@ def _extract_ms_fragments(answer_text: str, qa_id: int, client, debug: Callable)
         result = call_flash(client, messages, max_retries=1, debug_callback=debug)
         points = result.get("points", []) if isinstance(result, dict) else []
     except Exception as e:
-        debug(f"  fragment extraction failed for QA {qa_id}: {e}")
+        from .error_utils import log_exception
+        log_exception(debug, "Fragment extraction", f"qa={qa_id}", e)
         points = []
 
     fragments = []
@@ -131,7 +132,8 @@ def _classify_qa_against_kps(qa_text: str, answer_text: str, kp_concepts: list[d
         result = call_flash(client, messages, max_retries=1, debug_callback=debug)
         scores = result.get("kp_scores", {}) if isinstance(result, dict) else {}
     except Exception as e:
-        debug(f"  KP classification failed for QA: {e}")
+        from .error_utils import log_exception
+        log_exception(debug, "KP classification", "", e)
         scores = {}
 
     return {k: float(v) for k, v in scores.items() if isinstance(v, (int, float))}

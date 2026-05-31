@@ -26,8 +26,9 @@ def load_kp_from_db(db, qa_rows=None) -> list[dict]:
                 "scoring": "",
                 "source": "dynamic_topic",
             })
-    except Exception:
-        _log.debug("Failed to load KPs from dynamic_topics", exc_info=True)
+    except Exception as e:
+        from ..error_utils import log_exception
+        log_exception(_log, "KP cache", "dynamic_topics", e, level="warning")
 
     try:
         rows = qa_rows if qa_rows is not None else db.qa.get_all()
@@ -49,8 +50,9 @@ def load_kp_from_db(db, qa_rows=None) -> list[dict]:
                 "difficulty": r["difficulty_estimate"] or "",
                 "source": "qa_pairs",
             })
-    except Exception:
-        _log.debug("Failed to load KPs from qa_pairs", exc_info=True)
+    except Exception as e:
+        from ..error_utils import log_exception
+        log_exception(_log, "KP cache", "qa_pairs", e, level="warning")
     return kps
 
 
@@ -91,8 +93,9 @@ def load_kp_cache(db=None, points_file: str = "", qa_rows=None) -> list[dict]:
                         elif s and (s[0].isdigit() or s.startswith("See also") or s.startswith("Related:")):
                             break
                     kps.append({"topic": current_topic, "concept": concept, "detail": detail, "pitfall": pitfall, "scoring": scoring})
-    except Exception:
-        _log.debug("Failed to parse points.txt KP cache", exc_info=True)
+    except Exception as e:
+        from ..error_utils import log_exception
+        log_exception(_log, "KP cache", "points.txt", e, level="warning")
     return kps
 
 
@@ -118,8 +121,9 @@ def build_analysis_context(db, topics: list[str], student_verb: str, student_id:
                     parts.append(f"Topic [{t}] is advanced — provide detailed explanation with first-principles build-up.")
                 elif d.get("mode_difficulty") == "basic":
                     parts.append(f"Topic [{t}] is basic — keep explanation concise and direct.")
-    except Exception:
-        _log.debug("Failed to load topic difficulty", exc_info=True)
+    except Exception as e:
+        from ..error_utils import log_exception
+        log_exception(_log, "Topic difficulty", "", e, level="warning")
 
     # 2. Command verb pattern
     if student_verb:
@@ -129,8 +133,9 @@ def build_analysis_context(db, topics: list[str], student_verb: str, student_id:
                 if p["verb"] == student_verb and p.get("pattern_summary"):
                     parts.append(f"Answer style for '{student_verb}' questions: {p['pattern_summary']}")
                     break
-        except Exception:
-            _log.debug("Failed to load verb patterns", exc_info=True)
+        except Exception as e:
+            from ..error_utils import log_exception
+            log_exception(_log, "Verb patterns", "", e, level="warning")
 
     # 3. Prerequisites
     try:
@@ -144,8 +149,9 @@ def build_analysis_context(db, topics: list[str], student_verb: str, student_id:
                         f"Student may not have mastered prerequisite [{pre_topic}] for [{t}]. "
                         f"Briefly recap {pre_topic} before explaining {t}."
                     )
-    except Exception:
-        _log.debug("Failed to load prerequisites", exc_info=True)
+    except Exception as e:
+        from ..error_utils import log_exception
+        log_exception(_log, "Prerequisites", "", e, level="warning")
 
     # 4. Student confusion history
     try:
@@ -154,8 +160,9 @@ def build_analysis_context(db, topics: list[str], student_verb: str, student_id:
         relevant_confusions = confused_topics & set(topics)
         if relevant_confusions:
             parts.append(f"Student has shown confusion on: {', '.join(relevant_confusions)}. Address these carefully.")
-    except Exception:
-        _log.debug("Failed to load confusion history", exc_info=True)
+    except Exception as e:
+        from ..error_utils import log_exception
+        log_exception(_log, "Confusion history", "", e, level="warning")
 
     if parts:
         return "[Analysis Context]\n" + "\n".join(parts) + "\n\n"

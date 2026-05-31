@@ -61,7 +61,8 @@ def _generate_summary(question_text: str, answer_text: str,
             return result.get("summary", question_text[:200]), result.get("topic", "(unnamed)")
         return str(result), "(unnamed)"
     except Exception as e:
-        debug(f"  summary generation failed: {e}")
+        from ..error_utils import log_exception
+        log_exception(debug, "Summary generation", "", e)
         return question_text[:200], "(unnamed)[auto]"
 
 # -- Round 1: Answer with past QAs --
