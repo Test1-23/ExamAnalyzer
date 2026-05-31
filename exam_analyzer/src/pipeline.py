@@ -217,6 +217,40 @@ class PipelineContext:
     tracker: object
 
 
+class StageCounters:
+    """Per-stage failure counters for end-of-pipeline summary.
+
+    Incremented at each ``except Exception`` block in run_pipeline().
+    Provides ``summarize()`` for a human-readable failure report.
+    """
+
+    def __init__(self):
+        self.pdf_extraction = 0
+        self.qa_pairing = 0
+        self.phase1_worker = 0
+        self.phase2_worker = 0
+        self.answer_round1 = 0
+        self.grade_round2 = 0
+        self.fragment_extraction = 0
+        self.kp_classification = 0
+        self.cross_paper_check = 0
+        self.post_processing = 0
+        self.stage_list = 0
+
+    def summarize(self) -> str:
+        parts = []
+        for field in (
+            "pdf_extraction", "qa_pairing", "phase1_worker", "phase2_worker",
+            "answer_round1", "grade_round2", "fragment_extraction",
+            "kp_classification", "cross_paper_check", "post_processing",
+            "stage_list",
+        ):
+            v = getattr(self, field)
+            if v > 0:
+                parts.append(f"{field}={v}")
+        return ", ".join(parts) if parts else "none"
+
+
 _FILENAME_RE = re.compile(r'^(\d+)_([smw])(\d{2})_(\d+)')
 
 
@@ -531,6 +565,8 @@ def run_pipeline(
         if log_callback:
             log_callback(step, detail)
 
+    counters = StageCounters()
+
     _progress(0, "Initializing...")
     os.makedirs(input_dir, exist_ok=True)
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
@@ -610,6 +646,7 @@ def run_pipeline(
             ms_pdf = extract_pdf(ms_path)
         except Exception as e:
             _debug(f"[{display_name}] PDF extraction failed: {e}, skipping")
+            counters.pdf_extraction += 1
             continue
 
         pair = ExtractedPair(display_name=display_name, qp=qp_pdf, ms=ms_pdf)
@@ -617,6 +654,7 @@ def run_pipeline(
             qa_pairs = stage2_qa_pairing(pair, client, _debug)
         except Exception as e:
             _debug(f"[{display_name}] QA pairing failed: {e}, skipping")
+            counters.qa_pairing += 1
             continue
 
         if not qa_pairs:
@@ -642,6 +680,7 @@ def run_pipeline(
                     except Exception as e:
                         qa = futures[future]
                         _debug(f"  Q{qa.question_number} Phase1 failed: {e}")
+                        counters.phase1_worker += 1
                         tracker.step("")  # count failure too
 
             _debug(f"[{display_name}] KB: {db.count()} entries")
@@ -677,6 +716,7 @@ def run_pipeline(
                     except Exception as e:
                         qa = futures[future]
                         _debug(f"  Q{qa.question_number} thread failed: {e}")
+                        counters.phase2_worker += 1
                         tracker.step("")  # count failure too
 
             for qa_id, summary in qa_results:
@@ -747,6 +787,7 @@ def run_pipeline(
             run_cross_paper_check(db, display_name, debug_callback=_debug)
         except Exception as e:
             _debug(f"Cross-paper check failed (non-fatal): {e}")
+            counters.cross_paper_check += 1
 
     # -- Compute topic_related + groups (read-only, before post-processing try block) --
     groups = db.get_topic_groups()
@@ -792,6 +833,7 @@ def run_pipeline(
         _progress(95, "Output written")
     except Exception as e:
         log_stage_error("Core post-processing", _debug, e)
+        counters.post_processing += 1
         if not content:
             content = "[FALLBACK] " + ("; ".join(
                 qa["answer_text"] for g in groups.values() if g
@@ -829,6 +871,14 @@ def run_pipeline(
             stage_fn()
         except Exception as e:
             log_stage_error(label, _debug, e)
+            counters.stage_list += 1
+
+    # ── End-of-pipeline failure summary ──
+    failure_summary = counters.summarize()
+    if failure_summary != "none":
+        _debug(f"[Pipeline] Stage failures: {failure_summary}")
+    else:
+        _debug("[Pipeline] Stage failures: none")
 
     _progress(100, "Analysis complete")
     db.close()
