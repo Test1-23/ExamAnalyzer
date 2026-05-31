@@ -207,10 +207,6 @@ class QADatabase:
         """(deprecated — use db.topic.get_fragments instead)"""
         return self.topic.get_fragments(topic_id)
 
-    def get_fragment_help_count(self, fragment_id: str) -> int:
-        """(deprecated — use db._qb.count('fragment_help_map', ...) instead)"""
-        return self._qb.count("fragment_help_map", fragment_id=fragment_id)
-
     def get_topic_helped_questions(self, topic_id: str) -> set:
         """(deprecated — use db.fragment.get_topic_helped_questions instead)"""
         return self.fragment.get_topic_helped_questions(topic_id)
@@ -226,10 +222,6 @@ class QADatabase:
         self.fragment.upsert_centrality(fragment_id, centrality_score,
                                         avg_help_score=avg_help_score,
                                         topic_coherence=topic_coherence, variance=variance)
-
-    def get_fragment_centrality(self, fragment_id: str) -> dict | None:
-        """(deprecated — use db._qb.get('fragment_centrality', ...) instead)"""
-        return self._qb.get("fragment_centrality", fragment_id, id_col="fragment_id")
 
     def get_topic_fragment_centralities(self, topic_id: str) -> list[dict]:
         """(deprecated — use db.fragment.get_topic_centralities instead)"""
@@ -291,10 +283,6 @@ class QADatabase:
     def save_student_memory(self, student_id: str, memory_type: str, topic: str, content: str):
         """(deprecated — use db.student.save_memory instead)"""
         self.student.save_memory(student_id, memory_type, topic, content)
-
-    def get_student_memories(self, student_id: str, limit: int = 20) -> list[dict]:
-        """(deprecated — use db.student.get_memories instead)"""
-        return self.student.get_memories(student_id, limit)
 
     def get_student_confusions(self, student_id: str) -> list[dict]:
         """(deprecated — use db.student.get_confusions instead)"""
@@ -443,10 +431,6 @@ class QADatabase:
         """(deprecated — use db.kp.get_edges instead)"""
         return self.kp.get_edges(kp_id)
 
-    def get_kp_graph(self) -> dict:
-        """(deprecated — use db.kp.get_graph instead)"""
-        return self.kp.get_graph()
-
     # ---- QA-KP Membership ----
 
     def set_qa_kp_membership(self, qa_id: int, kp_id: str,
@@ -465,10 +449,6 @@ class QADatabase:
                           from_state: str, to_state: str, trigger: str = ""):
         """(deprecated — use db.student.record_trajectory instead)"""
         self.student.record_trajectory(student_id, kp_id, from_state, to_state, trigger)
-
-    def get_student_trajectory(self, student_id: str, limit: int = 20) -> list[dict]:
-        """(deprecated — use db.student.get_trajectory instead)"""
-        return self.student.get_trajectory(student_id, limit)
 
     # ---- Exam Trends ----
 
