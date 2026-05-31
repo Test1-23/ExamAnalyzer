@@ -142,21 +142,16 @@ def _detect_topic_splits(db: QADatabase, debug_cb=None) -> int:
 
 def _detect_topic_merges(db: QADatabase, debug_cb=None) -> int:
     """Detect topic pairs with high behavioral overlap and merge them."""
-    topics = db.conn.execute(
-        "SELECT topic_id, mass FROM dynamic_topics WHERE mass >= 2 AND quality != 'dissolved'"
-    ).fetchall()
+    from .queries import DiagnosticQueries
+    dq = DiagnosticQueries(db)
+    topics = dq.get_active_topics()
     if len(topics) < 2:
         return 0
 
     topic_ids = [t["topic_id"] for t in topics]
 
     # Pre-load fragment help data for affinity computation
-    frag_helps = {}
-    help_rows = db.conn.execute(
-        "SELECT fragment_id, helped_qa_id FROM fragment_help_map"
-    ).fetchall()
-    for r in help_rows:
-        frag_helps.setdefault(r["fragment_id"], set()).add(r["helped_qa_id"])
+    frag_helps = dq.load_fragment_helps()
     topic_helps = {tid: db.get_topic_helped_questions(tid) for tid in topic_ids}
 
     merges = 0

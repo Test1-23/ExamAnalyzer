@@ -31,7 +31,7 @@ def assess_difficulty(db: QADatabase, client, verb_data: dict, debug_cb, progres
         return {}
 
     current_count = len(qas)
-    prev = db.get_checkpoint("difficulty")
+    prev = db.analysis.get_checkpoint("difficulty")
     if prev and prev.get("qa_count_at_run") == current_count:
         new_qas = [qa for qa in qas if not qa.get("difficulty_estimate", "")]
         if not new_qas:
@@ -64,7 +64,7 @@ def assess_difficulty(db: QADatabase, client, verb_data: dict, debug_cb, progres
     # Phase 4: Topic-level aggregation
     _phase4_topic_aggregation(db)
 
-    db.checkpoint("difficulty", current_count, "completed")
+    db.analysis.checkpoint("difficulty", current_count, "completed")
 
     # Difficulty distribution summary
     diff_counts = db.conn.execute(

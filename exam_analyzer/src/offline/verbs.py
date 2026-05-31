@@ -33,7 +33,7 @@ def analyze_command_verbs(db: QADatabase, client, debug_cb, progress_cb=None) ->
     # Check incremental: only process QAs without command_verb
     new_qas = [qa for qa in qas if not qa.get("command_verb", "")]
     current_count = len(qas)
-    prev = db.get_checkpoint("command_verbs")
+    prev = db.analysis.get_checkpoint("command_verbs")
     if prev and prev.get("qa_count_at_run") == current_count and not new_qas:
         _log.info("Task 2: Already complete, skipping")
         return {}
@@ -58,7 +58,7 @@ def analyze_command_verbs(db: QADatabase, client, debug_cb, progress_cb=None) ->
     # Phase 4: Assign verb families
     _phase4_assign_families(db)
 
-    db.checkpoint("command_verbs", current_count, "completed")
+    db.analysis.checkpoint("command_verbs", current_count, "completed")
     # Verb coverage summary
     total = len(db.get_all())
     annotated = len([q for q in db.get_all() if q.get("command_verb", "")])

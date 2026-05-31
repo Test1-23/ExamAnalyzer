@@ -31,7 +31,7 @@ def discover_dependencies(db: QADatabase, client, debug_cb, progress_cb=None) ->
         return []
 
     current_count = len(qas)
-    prev = db.get_checkpoint("dependencies")
+    prev = db.analysis.get_checkpoint("dependencies")
     if prev and prev.get("qa_count_at_run") == current_count:
         _log.info("Task 1: Already complete, skipping")
         return []
@@ -54,7 +54,7 @@ def discover_dependencies(db: QADatabase, client, debug_cb, progress_cb=None) ->
     # Phase 2: Graph post-processing
     _phase2_postprocess_dependencies(db, validated, debug_cb)
 
-    db.checkpoint("dependencies", current_count, "completed")
+    db.analysis.checkpoint("dependencies", current_count, "completed")
 
     # Dependency confidence distribution
     conf_counts = db.conn.execute(
