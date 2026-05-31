@@ -153,10 +153,6 @@ class QADatabase:
         """(deprecated — use db.analysis.upsert_distillation_cache instead)"""
         self.analysis.upsert_distillation_cache(topic, qa_count, qa_ids_hash, content)
 
-    def invalidate_distillation_cache(self, topic: str):
-        """(deprecated — use db.analysis.invalidate_distillation_cache instead)"""
-        self.analysis.invalidate_distillation_cache(topic)
-
     # ============================================================
     # Evolution history — tracks KP self-improvement events
     # ============================================================
@@ -239,17 +235,9 @@ class QADatabase:
         """(deprecated — use db.vector.upsert_qa_kp_score instead)"""
         self.vector.upsert_qa_kp_score(qa_id, kp_id, relevance_score)
 
-    def get_qa_kp_scores(self, qa_id: int) -> dict[str, float]:
-        """(deprecated — use db.vector.get_qa_kp_scores instead)"""
-        return self.vector.get_qa_kp_scores(qa_id)
-
     def upsert_topic_vector(self, topic_id: str, vector: np.ndarray, member_count: int = 0):
         """(deprecated — use db.vector.upsert_topic_vector instead)"""
         self.vector.upsert_topic_vector(topic_id, vector, member_count)
-
-    def get_topic_vector(self, topic_id: str) -> np.ndarray | None:
-        """(deprecated — use db.vector.get_topic_vector instead)"""
-        return self.vector.get_topic_vector(topic_id)
 
     def record_fragment_help_with_level(self, fragment_id: str, helped_qa_id: int,
                                          help_effect: float = 0.0, help_level: str = ""):
@@ -288,10 +276,6 @@ class QADatabase:
         """(deprecated — use db.student.get_confusions instead)"""
         return self.student.get_confusions(student_id)
 
-    def record_confusion(self, student_id: str, topic: str, trigger: str, ctype: str):
-        """(deprecated — use db.student.record_confusion instead)"""
-        self.student.record_confusion(student_id, topic, trigger, ctype)
-
     def upsert_knowledge_state(self, student_id: str, topic: str, state: str):
         """(deprecated — use db.student.upsert_knowledge_state instead)"""
         self.student.upsert_knowledge_state(student_id, topic, state)
@@ -317,10 +301,6 @@ class QADatabase:
             embedding_cos=spec.embedding_cos, confidence=spec.confidence,
             validated_by=spec.validated_by)
 
-    def get_dependencies(self, confidence: str = None) -> list[dict]:
-        """(deprecated — use db.analysis.get_dependencies instead)"""
-        return self.analysis.get_dependencies(confidence)
-
     def get_dependency_graph(self) -> dict:
         """(deprecated — use db.analysis.get_dependency_graph instead)"""
         return self.analysis.get_dependency_graph()
@@ -328,10 +308,6 @@ class QADatabase:
     def get_direct_prerequisites(self, topic: str) -> list[dict]:
         """(deprecated — use db.analysis.get_direct_prerequisites instead)"""
         return self.analysis.get_direct_prerequisites(topic)
-
-    def get_transitive_prerequisites(self, topic: str, max_depth: int = 5) -> list[str]:
-        """(deprecated — use db.analysis.get_transitive_prerequisites instead)"""
-        return self.analysis.get_transitive_prerequisites(topic, max_depth)
 
     # ---- Command verb patterns ----
 
@@ -352,10 +328,6 @@ class QADatabase:
         """(deprecated — use db.analysis.get_verb_patterns instead)"""
         return self.analysis.get_verb_patterns()
 
-    def get_verb_for_qa(self, qa_id: int) -> dict:
-        """(deprecated — use db.qa.get_verb_for_qa instead)"""
-        return self.qa.get_verb_for_qa(qa_id)
-
     # ---- Topic difficulty ----
 
     def upsert_topic_difficulty(self, topic: str, qa_count: int = 0,
@@ -375,10 +347,6 @@ class QADatabase:
         """(deprecated — use db.topic.get_difficulty instead)"""
         return self.topic.get_difficulty(topic)
 
-    def get_qa_difficulty(self, qa_id: int) -> str:
-        """(deprecated — use db.qa.get_qa_difficulty instead)"""
-        return self.qa.get_qa_difficulty(qa_id)
-
     def get_effective_miss_rate(self, qa_id: int) -> Optional[float]:
         """(deprecated — use db.qa.get_effective_miss_rate instead)"""
         return self.qa.get_effective_miss_rate(qa_id)
@@ -392,10 +360,6 @@ class QADatabase:
     def get_checkpoint(self, task_name: str) -> dict:
         """(deprecated — use db.analysis.get_checkpoint instead)"""
         return self.analysis.get_checkpoint(task_name)
-
-    def clear_checkpoint(self, task_name: str):
-        """(deprecated — use db.analysis.clear_checkpoint instead)"""
-        self.analysis.clear_checkpoint(task_name)
 
     # ---- Topic vectors helper (for dependency candidate generation) ----
 
@@ -439,10 +403,6 @@ class QADatabase:
         """(deprecated — use db.kp.set_membership instead)"""
         self.kp.set_membership(qa_id, kp_id, membership_strength, is_representative)
 
-    def get_kp_qas(self, kp_id: str) -> list[dict]:
-        """(deprecated — use db.kp.get_kp_qas instead)"""
-        return self.kp.get_kp_qas(kp_id)
-
     # ---- Student Trajectory ----
 
     def record_trajectory(self, student_id: str, kp_id: str,
@@ -460,10 +420,6 @@ class QADatabase:
                                         occurrence_count=occurrence_count,
                                         avg_difficulty=avg_difficulty,
                                         trend_summary=trend_summary)
-
-    def get_exam_trends(self, kp_id: str = None) -> list[dict]:
-        """(deprecated — use db.analysis.get_exam_trends instead)"""
-        return self.analysis.get_exam_trends(kp_id)
 
     def close(self):
         self._db.close()
