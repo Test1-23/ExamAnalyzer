@@ -133,7 +133,7 @@ def _phase1_difficulty_benchmark(db, qas, client, debug_cb):
 
         messages = DIFFICULTY_RATE.build(lang=lang, qa_block=qa_block)
         try:
-            result = call_flash(client, messages, max_retries=1, debug_callback=debug_cb)
+            result, _ = call_flash(client, messages, max_retries=1, debug_callback=debug_cb)
             ratings = result.get("ratings", []) if isinstance(result, dict) else []
         except Exception as e:
             from ..error_utils import log_exception
@@ -363,7 +363,7 @@ def _phase3_classify_and_confirm(db, qas, boundaries, client, verb_data, debug_c
 
             messages = DIFFICULTY_RATE.build(lang=lang, qa_block=qa_block)
             try:
-                result = call_flash(client, messages, max_retries=1, debug_callback=debug_cb)
+                result, _ = call_flash(client, messages, max_retries=1, debug_callback=debug_cb)
                 ratings = result.get("ratings", []) if isinstance(result, dict) else []
             except Exception as e:
                 from ..error_utils import log_exception

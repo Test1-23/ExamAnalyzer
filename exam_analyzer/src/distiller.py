@@ -402,7 +402,7 @@ class Distiller:
             {"role": "user", "content": self._dist_usr % (_escape_pct(topic), n_qa, _escape_pct(qa_texts))},
         ]
         try:
-            result = call_flash(self._client, messages, max_retries=1, debug_callback=self._debug)
+            result, _ = call_flash(self._client, messages, max_retries=1, debug_callback=self._debug)
             kps = result.get("knowledge_points", [])
         except Exception as e:
             from .error_utils import log_exception
@@ -463,7 +463,7 @@ class Distiller:
             {"role": "user", "content": batch_usr % _escape_pct(combined)},
         ]
         try:
-            result = call_flash(self._client, messages, max_retries=1, debug_callback=self._debug)
+            result, _ = call_flash(self._client, messages, max_retries=1, debug_callback=self._debug)
             flash_result = result.get("topics", [])
         except Exception as e:
             from .error_utils import log_exception

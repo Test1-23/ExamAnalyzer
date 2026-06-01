@@ -169,7 +169,7 @@ def _generate_kp_for_stable_topics(db: QADatabase, client, debug) -> None:
 
         messages = [{"role": "system", "content": sys}, {"role": "user", "content": usr}]
         try:
-            result = call_flash(client, messages, max_retries=1, debug_callback=debug)
+            result, _ = call_flash(client, messages, max_retries=1, debug_callback=debug)
             concept = result.get("concept", topic["name"]) if isinstance(result, dict) else topic["name"]
             detail = result.get("detail", "") if isinstance(result, dict) else ""
         except Exception as e:

@@ -51,7 +51,7 @@ def extract_template(db: QADatabase, kp_id: str, client, debug_cb=None) -> dict:
 
     messages = [{"role": "system", "content": sys}, {"role": "user", "content": usr}]
     try:
-        result = call_flash(client, messages, max_retries=1, debug_callback=debug_cb)
+        result, _ = call_flash(client, messages, max_retries=1, debug_callback=debug_cb)
         return result if isinstance(result, dict) else {}
     except Exception as e:
         from .error_utils import log_exception
@@ -144,7 +144,7 @@ def generate_answer(question: str, kp_id: str, db: QADatabase, client, debug_cb=
 
     messages = [{"role": "system", "content": sys}, {"role": "user", "content": usr}]
     try:
-        result = call_flash(client, messages, max_retries=1, debug_callback=debug_cb)
+        result, _ = call_flash(client, messages, max_retries=1, debug_callback=debug_cb)
         answer = result.get("answer", "") if isinstance(result, dict) else str(result)
     except Exception as e:
         from .error_utils import log_exception
@@ -162,7 +162,7 @@ def generate_answer(question: str, kp_id: str, db: QADatabase, client, debug_cb=
         'Return JSON: {"covered_points": [...], "missed_points": [...], "pass": true/false}'
     )
     try:
-        val_result = call_flash(client, [
+        val_result, _ = call_flash(client, [
             {"role": "system", "content": validate_sys},
             {"role": "user", "content": validate_usr},
         ], max_retries=1, debug_callback=debug_cb)

@@ -24,7 +24,7 @@ def stage2_qa_pairing(pair, client, debug: Callable) -> list:
         qp_text=qp_text, ms_text=ms_text,
         lang=detect_content_lang((qp_text + ms_text)[:2000]))
 
-    result = call_flash(client, messages, debug_callback=debug)
+    result, _ = call_flash(client, messages, debug_callback=debug)
     raw_pairs = result.get("qa_pairs", [])
     debug(f"  QA pairing: {len(raw_pairs)} questions found")
     qa_list = []
@@ -56,7 +56,7 @@ def _generate_summary(question_text: str, answer_text: str,
         PromptType.SUMMARY, question_text=question_text,
         answer_text=answer_text, topic_list=topic_list, lang=lang)
     try:
-        result = call_flash(client, messages, max_retries=1, debug_callback=debug)
+        result, _ = call_flash(client, messages, max_retries=1, debug_callback=debug)
         if isinstance(result, dict):
             return result.get("summary", question_text[:200]), result.get("topic", "(unnamed)")
         return str(result), "(unnamed)"

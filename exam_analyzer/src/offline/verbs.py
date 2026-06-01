@@ -114,7 +114,7 @@ def _phase1_extract_verbs(qas, db, client, debug_cb, progress_cb):
         messages = [{"role": "system", "content": sys}, {"role": "user", "content": usr}]
         flash_ok = True
         try:
-            result = call_flash(client, messages, max_retries=1, debug_callback=debug_cb)
+            result, _ = call_flash(client, messages, max_retries=1, debug_callback=debug_cb)
             verb_list = result.get("verbs", []) if isinstance(result, dict) else []
         except Exception as e:
             from ..error_utils import log_exception
@@ -263,7 +263,7 @@ def _phase3_summarize_patterns(verb_groups, verb_stats, db, client, debug_cb):
             qa_texts=qa_texts,
         )
         try:
-            result = call_flash(client, messages, max_retries=1, debug_callback=debug_cb)
+            result, _ = call_flash(client, messages, max_retries=1, debug_callback=debug_cb)
             summary = result.get("pattern_summary", "") if isinstance(result, dict) else ""
         except Exception as e:
             from ..error_utils import log_exception

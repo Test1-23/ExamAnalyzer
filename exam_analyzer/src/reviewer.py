@@ -36,7 +36,7 @@ def review_distilled(content: str, client, topic_links: dict, topic_related: dic
 
     reviewed = content
     try:
-        result = call_flash(client, [{"role": "system", "content": sys_a},
+        result, _ = call_flash(client, [{"role": "system", "content": sys_a},
                                       {"role": "user", "content": usr_a}],
                            max_retries=1, debug_callback=debug)
         if isinstance(result, dict) and result.get("content"):
@@ -64,7 +64,7 @@ def review_distilled(content: str, client, topic_links: dict, topic_related: dic
                  '返回 JSON: {"content": "修正后的完整文件"}')
 
     try:
-        result = call_flash(client, [{"role": "system", "content": sys_b},
+        result, _ = call_flash(client, [{"role": "system", "content": sys_b},
                                       {"role": "user", "content": usr_b}],
                            max_retries=1, debug_callback=debug)
         if isinstance(result, dict) and result.get("content"):

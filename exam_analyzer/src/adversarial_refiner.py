@@ -128,7 +128,7 @@ def refine_kp(db: QADatabase, kp_id: str, client, debug_cb=None) -> dict:
         # Challenger
         chal_msgs = _build_challenger_prompt(kp, qas, lang, prev_issues)
         try:
-            chal_result = call_flash(client, chal_msgs, max_retries=1, debug_callback=debug_cb)
+            chal_result, _ = call_flash(client, chal_msgs, max_retries=1, debug_callback=debug_cb)
             chal_result = chal_result if isinstance(chal_result, dict) else {}
         except Exception as e:
             from .error_utils import log_exception
@@ -150,7 +150,7 @@ def refine_kp(db: QADatabase, kp_id: str, client, debug_cb=None) -> dict:
         # Defender
         def_msgs = _build_defender_prompt(kp, issues, qas, lang)
         try:
-            def_result = call_flash(client, def_msgs, max_retries=1, debug_callback=debug_cb)
+            def_result, _ = call_flash(client, def_msgs, max_retries=1, debug_callback=debug_cb)
             def_result = def_result if isinstance(def_result, dict) else {}
         except Exception as e:
             from .error_utils import log_exception
@@ -251,7 +251,7 @@ def cross_kp_consistency(db: QADatabase, kp_ids: list[str], client, debug_cb=Non
 
         messages = [{"role": "system", "content": sys}, {"role": "user", "content": usr}]
         try:
-            result = call_flash(client, messages, max_retries=1, debug_callback=debug_cb)
+            result, _ = call_flash(client, messages, max_retries=1, debug_callback=debug_cb)
             return result.get("issues", []) if isinstance(result, dict) else []
         except Exception as e:
             from .error_utils import log_exception
@@ -343,7 +343,7 @@ def auto_split_kp(db: QADatabase, kp_id: str, client, debug_cb=None) -> list[str
 
     messages = [{"role": "system", "content": sys}, {"role": "user", "content": usr}]
     try:
-        result = call_flash(client, messages, max_retries=1, debug_callback=debug_cb)
+        result, _ = call_flash(client, messages, max_retries=1, debug_callback=debug_cb)
     except Exception as e:
         from .error_utils import log_exception
         log_exception(debug_cb, "Auto-split KP", f"kp={kp_id}", e)

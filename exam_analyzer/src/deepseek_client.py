@@ -126,7 +126,7 @@ def _call_with_retry(
                 raw = _attempt_call(client, model, messages, response_format=fmt)
                 result = _extract_json(raw)
                 _log.info(f"API retry OK: model={model}, mode={'json' if use_json else 'text'}, attempts={total_attempts}")
-                return result
+                return result, total_attempts
             except Exception as e:
                 fail_reason = str(e)
                 wait = 2 ** attempt
@@ -149,7 +149,7 @@ def _call_with_retry(
             raw = _attempt_call(client, model, simplified, response_format=None)
             result = _extract_json(raw)
             _log.info(f"API retry OK: model={model}, mode=simplified_fallback, attempts={total_attempts + 1}")
-            return result
+            return result, total_attempts + 1
         except Exception as e:
             _log.warning(f"  Simplified fallback also failed: {e}")
 
@@ -166,6 +166,11 @@ def call_flash(
     messages: list,
     max_retries: int = DEFAULT_MAX_RETRIES,
     debug_callback=None,
-) -> dict:
-    """Call deepseek-v4-flash with retry + JSON fallback."""
+) -> tuple:
+    """Call deepseek-v4-flash with retry + JSON fallback.
+
+    Returns ``(result: dict, attempts: int)`` where *attempts* is the number
+    of API calls made (1 = first try succeeded, 2 = one retry needed, etc.).
+    Callers that don't need retry info can unpack with ``result, _ = ...``.
+    """
     return _call_with_retry(client, FLASH_MODEL, messages, max_retries, debug_callback)

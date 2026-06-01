@@ -58,7 +58,7 @@ def practice_grade():
             'Return JSON: {"covered_points": [...], "missed_points": [...], '
             '"feedback": "brief feedback", "score_pct": 0-100}'
         )
-        result = call_flash(client, [{"role": "system", "content": sys}, {"role": "user", "content": usr}], max_retries=1)
+        result, _ = call_flash(client, [{"role": "system", "content": sys}, {"role": "user", "content": usr}], max_retries=1)
         return jsonify(result if isinstance(result, dict) else {"feedback": str(result)})
     except Exception as e:
         return jsonify({"error": str(e)}), 500

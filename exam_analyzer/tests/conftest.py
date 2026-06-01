@@ -44,7 +44,7 @@ class MockFlashClient:
         self.respond_with[keyword] = response
 
     def __call__(self, client, messages, max_retries=1, debug_callback=None, json_mode=False):
-        """Mimic call_flash(client, messages, ...) → dict."""
+        """Mimic call_flash(client, messages, ...) → (dict, attempts)."""
         user_content = ""
         for m in messages:
             if m.get("role") == "user":
@@ -59,7 +59,7 @@ class MockFlashClient:
             "user_content": user_content,
             "result": result,
         })
-        return dict(result)  # shallow copy so tests can mutate originals
+        return dict(result), 1  # shallow copy + 1 attempt (no retries in mock)
 
 
 # ═══════════════════════════════════════════════════════════════

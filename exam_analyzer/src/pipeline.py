@@ -92,7 +92,7 @@ def _extract_ms_fragments(answer_text: str, qa_id: int, client, debug: Callable)
     """Split a mark scheme answer into individual scoring points. Preserves original wording."""
     messages = FRAGMENT.build(lang_source=answer_text, answer_text=answer_text)
     try:
-        result = call_flash(client, messages, max_retries=1, debug_callback=debug)
+        result, _ = call_flash(client, messages, max_retries=1, debug_callback=debug)
         points = result.get("points", []) if isinstance(result, dict) else []
     except Exception as e:
         from .error_utils import log_exception
@@ -129,7 +129,7 @@ def _classify_qa_against_kps(qa_text: str, answer_text: str, kp_concepts: list[d
                                   qa_text=qa_text[:500], answer_text=answer_text[:500],
                                   kp_list=kp_list)
     try:
-        result = call_flash(client, messages, max_retries=1, debug_callback=debug)
+        result, _ = call_flash(client, messages, max_retries=1, debug_callback=debug)
         scores = result.get("kp_scores", {}) if isinstance(result, dict) else {}
     except Exception as e:
         from .error_utils import log_exception
@@ -398,7 +398,7 @@ def _step_answer_and_grade(qa, top_similar, step0_topic, ctx: PipelineContext):
     r1_ok = True
     try:
         messages = _build_answer_prompt(qa.question_text, top_similar)
-        result = call_flash(ctx.client, messages, max_retries=1, debug_callback=ctx.debug)
+        result, retries = call_flash(ctx.client, messages, max_retries=1, debug_callback=ctx.debug)
     except Exception as e:
         ctx.debug(f"  Q{qn} Round1 failed: {e}")
         result = {"answer": "", "used_qa_indices": []}
@@ -434,7 +434,7 @@ def _step_answer_and_grade(qa, top_similar, step0_topic, ctx: PipelineContext):
     try:
         grade_msgs = _build_grade_prompt(
             qa.question_text, result.get("answer", ""), qa.answer_text)
-        grade = call_flash(ctx.client, grade_msgs, max_retries=1, debug_callback=ctx.debug)
+        grade, retries = call_flash(ctx.client, grade_msgs, max_retries=1, debug_callback=ctx.debug)
         if isinstance(grade, dict):
             r2_topic = grade.get("topic", "")
             covered = grade.get("covered_points", [])

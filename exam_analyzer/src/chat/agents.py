@@ -16,7 +16,7 @@ def agent_query_analyst(question: str, lang: str, client: Any) -> dict[str, Any]
     """Analyze question: rephrase for retrieval, classify type, extract command verb."""
     msgs = QUERY_ANALYST.build(lang=lang, question=question)
     try:
-        result = call_flash(client, msgs, max_retries=1)
+        result, _ = call_flash(client, msgs, max_retries=1)
         return result if isinstance(result, dict) else {"keywords": [], "qtype": "explanation", "verb": ""}
     except Exception as e:
         from .error_utils import log_exception
@@ -31,7 +31,7 @@ def agent_answer_generator(question: str, qtype: str, lang: str, ctx: str,
     """Generate answer with type-adaptive prompt."""
     msgs = build_answer_generator_messages(question, qtype, lang, ctx, ctx_kp, history)
     try:
-        result = call_flash(client, msgs, max_retries=1)
+        result, _ = call_flash(client, msgs, max_retries=1)
         return result if isinstance(result, dict) else {"answer": str(result)}
     except Exception as e:
         from .error_utils import log_exception
@@ -49,7 +49,7 @@ def agent_critic(question: str, answer: str, similar: list[dict[str, Any]], lang
 
     msgs = CRITIC.build(lang=lang, question=question, ctx=ctx, answer=answer)
     try:
-        result = call_flash(client, msgs, max_retries=1)
+        result, _ = call_flash(client, msgs, max_retries=1)
         return result if isinstance(result, dict) else {"pass": True, "feedback": ""}
     except Exception as e:
         from .error_utils import log_exception
@@ -83,7 +83,7 @@ def agent_suggest(question: str, answer: str, similar: list[dict[str, Any]], lan
 
     msgs = SUGGEST.build(lang=lang, question=question, topic_str=topic_str, prereq_hint=prereq_hint)
     try:
-        result = call_flash(client, msgs, max_retries=1)
+        result, _ = call_flash(client, msgs, max_retries=1)
         return result.get("suggestions", []) if isinstance(result, dict) else []
     except Exception as e:
         from .error_utils import log_exception

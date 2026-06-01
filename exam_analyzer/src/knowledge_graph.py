@@ -292,7 +292,7 @@ def generate_kps(db: QADatabase, clustering: dict, client, debug_cb=None) -> lis
 
         messages = [{"role": "system", "content": sys}, {"role": "user", "content": usr}]
         try:
-            result = call_flash(client, messages, max_retries=1, debug_callback=debug_cb)
+            result, _ = call_flash(client, messages, max_retries=1, debug_callback=debug_cb)
             groups = result.get("groups", []) if isinstance(result, dict) else []
         except Exception as e:
             from .error_utils import log_exception

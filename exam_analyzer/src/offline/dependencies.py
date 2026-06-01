@@ -169,7 +169,7 @@ def _phase1_validate_candidates(db, candidates, client, debug_cb):
 
         messages = DEPENDENCY_VALIDATE.build(lang=lang, pairs_block=pairs_block)
         try:
-            result = call_flash(client, messages, max_retries=1, debug_callback=debug_cb)
+            result, _ = call_flash(client, messages, max_retries=1, debug_callback=debug_cb)
             pairs = result.get("pairs", []) if isinstance(result, dict) else []
         except Exception as e:
             from ..error_utils import log_exception
