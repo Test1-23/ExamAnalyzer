@@ -214,8 +214,10 @@ def cluster_qas(db: QADatabase, debug_cb=None) -> dict:
         if coh_vals:
             coh_str = f", cohesion: min={min(coh_vals):.2f}, max={max(coh_vals):.2f}, avg={sum(coh_vals)/len(coh_vals):.2f}"
         noise_pct = len(noise) / (len(clusters) + len(noise)) * 100 if (len(clusters) + len(noise)) > 0 else 0
-        debug_cb(f"  [KG] Clusters: {len(clusters)} ({size_str}{coh_str})")
-        debug_cb(f"  [KG] Noise: {len(noise)} QAs ({noise_pct:.0f}% of total) — unclustered")
+        from .error_utils import log_info
+        log_info(debug_cb, "KG Clusters", f"{len(clusters)} ({size_str}{coh_str})")
+        from .error_utils import log_info
+        log_info(debug_cb, "KG Noise", f"{len(noise)} QAs ({noise_pct:.0f}% of total)")
 
     return {
         "clusters": clusters,
@@ -347,7 +349,8 @@ def generate_kps(db: QADatabase, clustering: dict, client, debug_cb=None) -> lis
 
                 batch_results.append(kp_id)
                 if debug_cb:
-                    debug_cb(f"  KP {kp_id}: '{name}' ({len(cluster)} QAs, cohesion={cohesions[cluster_idx]:.2f})")
+                    from .error_utils import log_info
+                    log_info(debug_cb, "KP named", f"{kp_id}: '{name}' ({len(cluster)} QAs, cohesion={cohesions[cluster_idx]:.2f})")
         return batch_results
 
     from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -363,9 +366,11 @@ def generate_kps(db: QADatabase, clustering: dict, client, debug_cb=None) -> lis
 
     if debug_cb:
         total_clusters = len(clusters)
-        debug_cb(f"  [KG] KPs generated: {len(kp_ids)} (cluster coverage: {len(kp_ids)}/{total_clusters})")
+        from .error_utils import log_info
+        log_info(debug_cb, "KG KPs generated", f"{len(kp_ids)} (cluster coverage: {len(kp_ids)}/{total_clusters})")
         batch_count = (len(clusters) + batch_size - 1) // batch_size if clusters else 0
-        debug_cb(f"  [KG] Flash naming: {batch_count} batches")
+        from .error_utils import log_info
+        log_info(debug_cb, "KG Flash naming", f"{batch_count} batches")
 
     return kp_ids
 
@@ -479,7 +484,8 @@ def discover_kp_edges(db: QADatabase, clustering: dict, kp_ids: list[str],
             edge_count += 1
 
     if debug_cb:
-        debug_cb(f"  KP edges discovered: {edge_count}")
+        from .error_utils import log_info
+        log_info(debug_cb, "KP edges", f"{edge_count} discovered")
 
     return edge_count
 
@@ -512,7 +518,8 @@ def discover_sequential_edges(db: QADatabase, clustering: dict, kp_ids: list[str
             edge_count += 1
 
     if debug_cb:
-        debug_cb(f"  Sequential edges: {edge_count} (from {len(transitions)} transitions)")
+        from .error_utils import log_info
+        log_info(debug_cb, "Sequential edges", f"{edge_count} (from {len(transitions)} transitions)")
 
     return edge_count
 
@@ -560,7 +567,8 @@ def discover_learning_path_edges(db: QADatabase, kp_ids: list[str],
             edge_count += 1
 
     if debug_cb:
-        debug_cb(f"  Learning path edges: {edge_count} (from {len(transitions)} transitions)")
+        from .error_utils import log_info
+        log_info(debug_cb, "Learning path edges", f"{edge_count} (from {len(transitions)} transitions)")
 
     return edge_count
 
@@ -618,7 +626,8 @@ def fuse_all_edges(db: QADatabase, kp_ids: list[str], debug_cb=None):
         ))
 
     if debug_cb:
-        debug_cb(f"  Edge fusion: {len(grouped)} unique pairs from {len(edges)} edges")
+        from .error_utils import log_info
+        log_info(debug_cb, "Edge fusion", f"{len(grouped)} unique pairs from {len(edges)} edges")
 
 
 def run_knowledge_graph(db, api_url: str, api_key: str,
@@ -658,17 +667,20 @@ def run_knowledge_graph(db, api_url: str, api_key: str,
     # Summary: edges by type
     edge_counts = db.kp.get_edge_counts()
     edge_str = ", ".join(f"{r['edge_type']}={r['cnt']}" for r in edge_counts)
-    _debug(f"  [KG] Edges: {edge_str}" if edge_str else "  [KG] Edges: none")
+    from .error_utils import log_info
+    log_info(_debug, "KG Edges", edge_str if edge_str else "none")
 
     # Post-fusion duplicate check
     dup_rows = db.kp.get_duplicate_edges()
     if dup_rows:
         duplicates = ", ".join(f"{r['source_kp']}<->{r['target_kp']}(x{r['cnt']})" for r in dup_rows)
-        _debug(f"  [KG] Post-fusion duplicate check: {duplicates}")
+        from .error_utils import log_info
+        log_info(_debug, "KG Post-fusion check", f"duplicates: {duplicates}")
     else:
         _debug("  [KG] Post-fusion duplicate check: clean (0 duplicates)")
 
-    _debug(f"Knowledge graph: {len(kp_ids)} KPs from {len(clustering['clusters'])} clusters")
+    from .error_utils import log_info
+    log_info(_debug, "KG Complete", f"{len(kp_ids)} KPs from {len(clustering['clusters'])} clusters")
     db.analysis.checkpoint("knowledge_graph", db.count(), "completed")
 
     _debug("Knowledge graph construction complete")

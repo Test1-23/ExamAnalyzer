@@ -71,7 +71,8 @@ def _build_missed_ref(db: QADatabase, topic: str, qas: list[dict], debug) -> str
            "markscheme scoring criteria:\n")
     for p in patterns[:5]:
         ref += f"- {p}\n"
-    debug(f"  missed patterns for '{topic}': {len(patterns)} from {len(filtered)}/{len(raw_missed)} lines")
+    from .error_utils import log_info
+    log_info(debug, "Missed patterns", f"'{topic}': {len(patterns)} from {len(filtered)}/{len(raw_missed)} lines")
     return ref
 
 
@@ -111,7 +112,8 @@ class Distiller:
             groups, weights, cache, topic_meta)
 
         if skipped_count:
-            self._debug(f"Incremental: reusing {skipped_count} cached, distilling {len(topic_items)} topics")
+            from .error_utils import log_info
+            log_info(self._debug, "Incremental", f"reusing {skipped_count} cached, distilling {len(topic_items)} topics")
 
         if not topic_items and not cached_results:
             return ""
@@ -127,7 +129,8 @@ class Distiller:
             batches.append(small_topics[i:i + BATCH_SIZE])
 
         if batches:
-            self._debug(f"Batching: {len(small_topics)} small topics into {len(batches)} batches, "
+            from .error_utils import log_info
+            log_info(self._debug, "Batching", f"{len(small_topics)} small topics into {len(batches)} batches, "
                         f"{len(large_topics)} large topics individually")
 
         # Execute: batch + individual tasks via thread pool
@@ -169,7 +172,8 @@ class Distiller:
             # Fallback: small topics missed by batch get individual distillation
             missed_small = [t for t in small_topics if t[0] not in results]
             if missed_small:
-                self._debug(f"  Batch missed {len(missed_small)} topics, running individual distillation")
+                from .error_utils import log_info
+                log_info(self._debug, "Batch missed", f"{len(missed_small)} topics, running individual distillation")
                 for item in missed_small:
                     try:
                         topic, text = self._distill_one(*item)
@@ -408,7 +412,8 @@ class Distiller:
         if not kps:
             cache = self._db.get_distillation_cache()
             if topic in cache:
-                self._debug(f"  distillation failed for '{topic}', reusing cached content")
+                from .error_utils import log_info
+                log_info(self._debug, "Distillation fallback", f"'{topic}', reusing cached content")
                 return (topic, cache[topic])
             return (topic, "")
 
@@ -483,7 +488,8 @@ class Distiller:
                     qa_ids_hash = bt_hash
                     break
             else:
-                self._debug(f"  Batch topic name mismatch: model returned '{t_name}'")
+                from .error_utils import log_info
+                log_info(self._debug, "Batch name mismatch", f"model returned '{t_name}'")
 
             content = self._format_kp_text(kps, t_name, marker)
             self._db.upsert_distillation_cache(t_name, n_qa, qa_ids_hash, content)
@@ -493,6 +499,7 @@ class Distiller:
         returned_topics = {td.get("topic", "").strip().lower() for td in flash_result}
         for bt_topic, _, _, _, _, _ in batch_topics:
             if bt_topic.strip().lower() not in returned_topics:
-                self._debug(f"  Batch missed topic '{bt_topic}', falling back to individual")
+                from .error_utils import log_info
+                log_info(self._debug, "Batch missed topic", f"'{bt_topic}', falling back to individual")
 
         return batch_results

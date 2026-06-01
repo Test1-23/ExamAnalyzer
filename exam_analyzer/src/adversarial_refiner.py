@@ -212,7 +212,8 @@ def refine_kp(db: QADatabase, kp_id: str, client, debug_cb=None) -> dict:
     ))
 
     if debug_cb:
-        debug_cb(f"  KP {kp_id}: quality={quality}, rounds={total_rounds}, "
+        from .error_utils import log_info
+        log_info(debug_cb, "KP refine", f"{kp_id}: quality={quality}, rounds={total_rounds}, "
                  f"pass_streak={pass_streak}")
 
     return kp
@@ -271,7 +272,8 @@ def cross_kp_consistency(db: QADatabase, kp_ids: list[str], client, debug_cb=Non
                     log_exception(debug_cb, "KP consistency", "thread", e)
 
     if debug_cb:
-        debug_cb(f"  Cross-KP consistency: {len(all_issues)} issues across {len(kp_ids)} KPs "
+        from .error_utils import log_info
+        log_info(debug_cb, "KP consistency", f"{len(all_issues)} issues across {len(kp_ids)} KPs "
                  f"({len(batches)} batches parallel)")
 
     return {"issues": all_issues}
@@ -378,7 +380,8 @@ def auto_split_kp(db: QADatabase, kp_id: str, client, debug_cb=None) -> list[str
         new_ids.append(new_id)
 
     if new_ids and debug_cb:
-        debug_cb(f"  Auto-split KP {kp_id} into {len(new_ids)} KPs: {new_ids}")
+        from .error_utils import log_info
+        log_info(debug_cb, "Auto-split", f"KP {kp_id} into {len(new_ids)} KPs: {new_ids}")
 
     return new_ids
 
@@ -420,7 +423,8 @@ def auto_merge_kps(db: QADatabase, issues: list[dict], debug_cb=None) -> int:
                    quality_rank.get(kp_b_data.get("quality"), 0))
         if a_score == b_score:
             if debug_cb:
-                debug_cb(f"  Auto-merge skipped for equal-quality KPs: {kp_a} ≈ {kp_b}")
+                from .error_utils import log_info
+                log_info(debug_cb, "Auto-merge skip", f"{kp_a} vs {kp_b}")
             continue
         if b_score > a_score:
             kp_a, kp_b = kp_b, kp_a
@@ -468,6 +472,7 @@ def auto_merge_kps(db: QADatabase, issues: list[dict], debug_cb=None) -> int:
         merged += 1
 
         if debug_cb:
-            debug_cb(f"  Auto-merge: {kp_b} → {kp_a} ({issue.get('issue', '')})")
+            from .error_utils import log_info
+            log_info(debug_cb, "Auto-merge", f"{kp_b} -> {kp_a} ({issue.get('issue', '')})")
 
     return merged
