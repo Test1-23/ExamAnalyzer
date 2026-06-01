@@ -139,6 +139,8 @@ def warmup_chat_retriever():
     """Pre-load embedding model in background so first chat request is fast."""
     def _warmup():
         try:
+            from src.embedding_cluster import _get_model, TOPIC_EMBED_MODEL
+            _get_model(TOPIC_EMBED_MODEL)  # trigger download if not cached
             get_chat_retriever()
         except Exception as e:
             from src.logger import get_logger

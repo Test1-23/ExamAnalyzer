@@ -1,7 +1,13 @@
 """Stage 0: Reachability test — uses existing DB, no new PDFs needed.
 Run: python test_reachability.py (from exam_analyzer/ directory)
-Verifies every code path completes without crashing."""
+Verifies every code path completes without crashing.
+
+This is a manual integration test requiring real API credentials.
+Marked with @pytest.mark.integration — skip in CI with -m 'not integration'.
+"""
 import sys, os, json
+import pytest
+pytestmark = pytest.mark.integration
 
 # tests/ → exam_analyzer/ (project root)
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
