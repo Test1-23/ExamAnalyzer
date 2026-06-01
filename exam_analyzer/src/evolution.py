@@ -19,7 +19,8 @@ def run_evolution_cycle(db: QADatabase, client, debug) -> None:
     try:
         result = run_phase2_cycle(db, debug_cb=debug)
         if result.get("migrated", 0) > 0:
-            debug(f"Evolution: {result['migrated']} fragments migrated")
+            from .error_utils import log_info
+            log_info(debug, "Evolution", f"{result['migrated']} fragments migrated")
     except Exception as e:
         from .error_utils import log_exception
         log_exception(debug, "Phase2 cycle", "", e)
@@ -50,7 +51,8 @@ def run_evolution_cycle(db: QADatabase, client, debug) -> None:
     # Re-review disputed KPs
     disputed = [dict(k) for k in kps if k["quality"] == "disputed"]
     if disputed:
-        debug(f"Evolution: {len(disputed)} disputed KPs — queuing for re-review")
+        from .error_utils import log_info
+        log_info(debug, "Evolution", f"{len(disputed)} disputed KPs - queuing for re-review")
         from concurrent.futures import ThreadPoolExecutor, as_completed
         targets = disputed[:3]
         with ThreadPoolExecutor(max_workers=min(len(targets), 3)) as executor:
@@ -101,7 +103,8 @@ def run_evolution_cycle(db: QADatabase, client, debug) -> None:
 
     pending_count = len(db.analysis.get_pending_evolutions())
     if pending_count:
-        debug(f"Evolution: {pending_count} improvement proposals queued")
+        from .error_utils import log_info
+        log_info(debug, "Evolution", f"{pending_count} improvement proposals queued")
 
     # Apply student feedback
     try:
@@ -114,7 +117,8 @@ def run_evolution_cycle(db: QADatabase, client, debug) -> None:
     try:
         outlier_count = _detect_outlier_qas(db, debug)
         if outlier_count:
-            debug(f"Evolution: {outlier_count} outlier QAs flagged for review")
+            from .error_utils import log_info
+            log_info(debug, "Evolution", f"{outlier_count} outlier QAs flagged for review")
     except Exception as e:
         from .error_utils import log_exception
         log_exception(debug, "Outlier detection", "", e)
@@ -128,7 +132,8 @@ def _generate_kp_for_stable_topics(db: QADatabase, client, debug) -> None:
     if not topics:
         return
 
-    debug(f"Phase 2: generating KP for {len(topics)} forming topics")
+    from .error_utils import log_info
+    log_info(debug, "Phase 2", f"generating KP for {len(topics)} forming topics")
 
     for topic in topics:
         topic_id = topic["topic_id"]
@@ -174,7 +179,8 @@ def _generate_kp_for_stable_topics(db: QADatabase, client, debug) -> None:
             detail = ""
 
         db.topic.set_kp(topic_id, concept, detail)
-        debug(f"  KP generated: [{topic_id}] {concept[:80]}")
+        from .error_utils import log_info
+        log_info(debug, "KP generated", f"[{topic_id}] {concept[:80]}")
 
 
 def _detect_outlier_qas(db: QADatabase, debug) -> int:

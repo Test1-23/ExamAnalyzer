@@ -66,3 +66,22 @@ def log_exception(
             getattr(logger, level)(tb)
         elif callable(logger):
             logger(tb)
+
+
+def log_info(logger, stage: str, message: str) -> None:
+    """Log an informational message with consistent formatting.
+
+    Produces ``[INFO] stage | message`` — mirroring the ``[ERROR] stage | ctx | exc``
+    format used by ``log_exception`` so all log output shares the same
+    grep-friendly prefix convention.
+
+    Usage::
+
+        log_info(debug, "Evolution", f"{count} fragments migrated")
+        # → [INFO] Evolution | 15 fragments migrated
+
+        log_info(_debug, display_name, "PDF extraction complete")
+        # → [INFO] 2024_s_01 | PDF extraction complete
+    """
+    if callable(logger):
+        logger(f"[INFO] {stage} | {message}")

@@ -79,7 +79,8 @@ def merge_similar_topics(db: QADatabase, client, debug) -> None:
                     canonical = topic_names[j]
                     mergers[topic_names[i]] = canonical
                     done.add(topic_names[i])
-                debug(f"  Topic merge: -> '{canonical}' (cos={cos:.2f})")
+                from .error_utils import log_info
+                log_info(debug, "Topic merge", f"-> '{canonical}' (cos={cos:.2f})")
             elif cos >= TOPIC_MERGE_AMBIGUOUS_THRESHOLD:
                 ambiguous.append((topic_names[i], topic_names[j], cos))
 
@@ -115,7 +116,8 @@ def merge_similar_topics(db: QADatabase, client, debug) -> None:
                     "INSERT INTO topic_links (src_topic, dst_topic, count) VALUES (?, ?, ?)",
                     (src, dst, total),
                 )
-        debug(f"  Topic merge: {len(flat_mergers)} groups, {merged_count} QAs affected, "
+        from .error_utils import log_info
+        log_info(debug, "Topic merge", f"{len(flat_mergers)} groups, {merged_count} QAs affected, "
               f"{len(all_links)} links -> {len(merged)} after merge")
 
 

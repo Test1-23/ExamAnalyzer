@@ -152,6 +152,7 @@ def _insert_see_also(content: str, topic_links: dict, topic_related: dict, debug
         else:
             out.append(line)
 
-    debug(f"  See also: {len(seen_sections)} topics annotated "
+    from .error_utils import log_info
+    log_info(debug, "Reviewer", f"See also: {len(seen_sections)} topics annotated "
           f"(links={len(topic_links)}, related={len(topic_related)})")
     return "\n".join(out)
