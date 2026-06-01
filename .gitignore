@@ -31,8 +31,7 @@ exam_analyzer/input/keepout/
 exam_analyzer/feedback/
 exam_analyzer/CLAUDE.md
 # Integration tests (require real API keys — must NOT be committed)
-exam_analyzer/tests/test_suite.py
-exam_analyzer/tests/test_reachability.py
+exam_analyzer/tests
 
 # Generated analysis reports
 exam_analyzer/分析报告*.md
