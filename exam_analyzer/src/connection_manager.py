@@ -12,11 +12,11 @@ _log = get_logger()
 
 
 class ConnectionMgr:
-    """Sole holder of the sqlite3.Connection for a QADatabase.
+    """Holder of sqlite3 connections for a QADatabase — per-thread pooling.
 
     Provides:
-    - Lazy connection with double-checked locking + WAL mode
-    - DDL execution and versioned schema migrations
+    - Per-thread lazy connections with WAL mode (concurrent reads, serial writes)
+    - DDL execution and versioned schema migrations (once per database)
     - ``transaction()`` context manager for atomic multi-step writes
     - Reentrant write lock (RLock) so individual methods that acquire the
       lock can be safely nested inside a ``transaction()`` block
@@ -24,9 +24,12 @@ class ConnectionMgr:
 
     def __init__(self, db_path: str):
         self._db_path = db_path
-        self._conn: Optional[sqlite3.Connection] = None
+        self._connections = threading.local()
+        self._all_connections: list = []  # for close()
+        self._connections_lock = threading.Lock()
         self._write_lock = threading.RLock()
         self._tx_depth = 0
+        self._schema_initialized = False
 
     # ------------------------------------------------------------------
     # Connection
@@ -34,34 +37,41 @@ class ConnectionMgr:
 
     @property
     def conn(self) -> sqlite3.Connection:
-        if self._conn is None:
-            with self._write_lock:
-                if self._conn is None:
-                    os.makedirs(os.path.dirname(self._db_path) or ".", exist_ok=True)
-                    self._conn = sqlite3.connect(self._db_path, check_same_thread=False)
-                    self._conn.execute("PRAGMA journal_mode=WAL")
-                    self._conn.row_factory = sqlite3.Row
-                    self._init_tables()
-        return self._conn
+        conn = getattr(self._connections, 'conn', None)
+        if conn is None:
+            os.makedirs(os.path.dirname(self._db_path) or ".", exist_ok=True)
+            conn = sqlite3.connect(self._db_path, check_same_thread=False)
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.row_factory = sqlite3.Row
+            self._connections.conn = conn
+            with self._connections_lock:
+                self._all_connections.append(conn)
+            # Schema initialization runs once (on whichever thread connects first)
+            if not self._schema_initialized:
+                with self._write_lock:
+                    if not self._schema_initialized:
+                        self._init_tables(conn)
+                        self._schema_initialized = True
+        return conn
 
     # ------------------------------------------------------------------
     # Schema
     # ------------------------------------------------------------------
 
-    def _init_tables(self):
+    def _init_tables(self, conn):
         for _name, ddl in SCHEMA_DDL:
-            self.conn.execute(ddl)
+            conn.execute(ddl)
         for idx_ddl in SCHEMA_INDEXES:
-            self.conn.execute(idx_ddl)
-        self.conn.commit()
-        self._run_migrations()
+            conn.execute(idx_ddl)
+        conn.commit()
+        self._run_migrations(conn)
 
-    def _run_migrations(self):
-        self.conn.execute(
+    def _run_migrations(self, conn):
+        conn.execute(
             "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY, "
             "description TEXT, applied_at TEXT DEFAULT (datetime('now')))"
         )
-        row = self.conn.execute(
+        row = conn.execute(
             "SELECT COALESCE(MAX(version), 0) as v FROM schema_version"
         ).fetchone()
         current = row["v"] if row else 0
@@ -71,16 +81,16 @@ class ConnectionMgr:
                 continue
             for stmt in statements:
                 try:
-                    self.conn.execute(stmt)
+                    conn.execute(stmt)
                 except sqlite3.OperationalError as e:
                     if "duplicate column" not in str(e).lower():
                         raise
-            self.conn.execute(
+            conn.execute(
                 "INSERT INTO schema_version (version, description) VALUES (?, ?)",
                 (version, description),
             )
             _log.info(f"DB migration v{version}: {description}")
-        self.conn.commit()
+        conn.commit()
 
     # ------------------------------------------------------------------
     # Transaction
@@ -138,9 +148,14 @@ class ConnectionMgr:
 
     def close(self):
         with self._write_lock:
-            if self._conn:
-                self._conn.close()
-                self._conn = None
+            with self._connections_lock:
+                conns = list(self._all_connections)
+                self._all_connections.clear()
+            for conn in conns:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
 
 class _TransactionContext:
