@@ -134,7 +134,8 @@ def _detect_topic_splits(db: QADatabase, debug_cb=None) -> int:
             )
         splits += 1
         if debug_cb:
-            debug_cb(f"  Split: {topic_id} -> [{new_id_a}]({len(s1)}) + "
+            from ..error_utils import log_info
+            log_info(debug_cb, "Split", f"{topic_id} -> [{new_id_a}]({len(s1)}) + "
                      f"[{new_id_b}]({len(s2)})")
 
     return splits
@@ -219,7 +220,8 @@ def _detect_topic_merges(db: QADatabase, debug_cb=None) -> int:
             merged_set.add(b)
             merges += 1
             if debug_cb:
-                debug_cb(f"  Merge: {a} + {b} -> {new_id} (jaccard={jaccard:.2f})")
+                from ..error_utils import log_info
+                log_info(debug_cb, "Merge", f"{a} + {b} -> {new_id} (jaccard={jaccard:.2f})")
 
     return merges
 
@@ -260,7 +262,8 @@ def _process_dissolved_topics(db: QADatabase, debug_cb=None) -> int:
             redistributed += 1
 
     if debug_cb and redistributed:
-        debug_cb(f"  Dissolved: {len(dissolved)} topics, {redistributed} fragments redistributed")
+        from ..error_utils import log_info
+        log_info(debug_cb, "Dissolved", f"{len(dissolved)} topics, {redistributed} fragments redistributed")
     return redistributed
 
 
@@ -402,6 +405,7 @@ def _adjust_vectors_from_feedback(db: QADatabase, debug_cb=None) -> dict:
             result["topics_adjusted"] += 1
 
     if debug_cb and sum(result.values()) > 0:
-        debug_cb(f"  Vector cascade: {result['fragments_adjusted']} fragments, "
+        from ..error_utils import log_info
+        log_info(debug_cb, "Vector cascade", f"{result['fragments_adjusted']} fragments, "
                  f"{result['kps_adjusted']} KPs, {result['topics_adjusted']} topics")
     return result

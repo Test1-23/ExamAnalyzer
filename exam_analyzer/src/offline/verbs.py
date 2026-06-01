@@ -63,9 +63,11 @@ def analyze_command_verbs(db: QADatabase, client, debug_cb, progress_cb=None) ->
     total = len(db.get_all())
     annotated = len([q for q in db.get_all() if q.get("command_verb", "")])
     unknown = len([q for q in db.get_all() if q.get("command_verb", "") == "unknown"])
-    debug_cb(f"  [Verbs] Coverage: {annotated}/{total} QAs annotated ({annotated/total*100:.0f}%)" if total else "")
+    from ..error_utils import log_info
+    log_info(debug_cb, "Verbs coverage", f"{annotated}/{total} QAs annotated ({annotated/total*100:.0f}%)" if total else "")
     if unknown:
-        debug_cb(f"  [Verbs] Unknown: {unknown} QAs — Flash couldn't determine verb")
+        from ..error_utils import log_info
+        log_info(debug_cb, "Verbs unknown", f"{unknown} QAs - Flash couldn't determine verb")
     # Top 10 verbs
     verb_counts = db.conn.execute(
         "SELECT command_verb, COUNT(*) as cnt FROM qa_pairs "
@@ -74,7 +76,8 @@ def analyze_command_verbs(db: QADatabase, client, debug_cb, progress_cb=None) ->
     ).fetchall()
     if verb_counts:
         vstr = ", ".join(f"{r['command_verb']}={r['cnt']}" for r in verb_counts)
-        debug_cb(f"  [Verbs] Distribution: {vstr}")
+        from ..error_utils import log_info
+        log_info(debug_cb, "Verbs distribution", f"{vstr}")
 
     _log.info(f"Task 2: Complete. {len(verb_stats)} verbs analyzed")
     return verb_stats
@@ -296,7 +299,8 @@ def _phase3_summarize_patterns(verb_groups, verb_stats, db, client, debug_cb):
             avg_miss_rate=stat["avg_miss_rate"], pattern_summary=summary,
             topic_specific_patterns=json.dumps(topic_specific) if topic_specific else "",
         ))
-        debug_cb(f"  Verb '{verb}': {stat['sample_count']} samples, pattern generated")
+        from ..error_utils import log_info
+        log_info(debug_cb, "Verb pattern", f"'{verb}': {stat['sample_count']} samples, pattern generated")
         return verb
 
     from concurrent.futures import ThreadPoolExecutor, as_completed

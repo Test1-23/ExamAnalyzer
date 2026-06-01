@@ -71,7 +71,8 @@ def discover_dependencies(db: QADatabase, client, debug_cb, progress_cb=None) ->
         for r in db.conn.execute("SELECT prerequisite, dependent FROM topic_dependencies").fetchall():
             nodes.add(r["prerequisite"]); nodes.add(r["dependent"])
         edge_count = sum(conf_map.values())
-        debug_cb(f"  [Dep] Dependencies: {cstr} — {len(nodes)} nodes, {edge_count} edges")
+        from ..error_utils import log_info
+        log_info(debug_cb, "Dependencies", f"{cstr} - {len(nodes)} nodes, {edge_count} edges")
 
     _log.info(f"Task 1: Complete. {len(validated)} dependencies stored")
     return validated
@@ -134,7 +135,8 @@ def _phase0_generate_candidates(db, debug_cb):
                         candidates.add((a, b, "embed_only", round(cos, 3)))
                         candidates.add((b, a, "embed_only", round(cos, 3)))
 
-    debug_cb(f"  Dependency candidates: {len(candidates)} pairs "
+    from ..error_utils import log_info
+    log_info(debug_cb, "Dependency candidates", f"{len(candidates)} pairs "
              f"(topic_links={len(topic_links)}, topics={len(topics)})")
     return list(candidates)
 
@@ -208,7 +210,8 @@ def _phase1_validate_candidates(db, candidates, client, debug_cb):
                     from ..error_utils import log_exception
                     log_exception(debug_cb, "Dependency validation", f"thread", e)
 
-    debug_cb(f"  Flash validated: {len(validated)} dependencies (from {len(candidates)} candidates, {len(batches)} batches parallel)")
+    from ..error_utils import log_info
+    log_info(debug_cb, "Flash validated", f"{len(validated)} dependencies (from {len(candidates)} candidates, {len(batches)} batches parallel)")
     return validated
 
 
@@ -262,7 +265,8 @@ def _phase2_postprocess_dependencies(db, validated, debug_cb):
     stored = 0
     for (pre, dep), v in edges.items():
         if (pre, dep) in redundant:
-            debug_cb(f"  Transitive reduction: removed {pre}→{dep}")
+            from ..error_utils import log_info
+            log_info(debug_cb, "Transitive reduction", f"removed {pre}->{dep}")
             continue
         db.analysis.insert_dependency(DependencySpec(
             prerequisite=pre, dependent=dep,
@@ -276,7 +280,8 @@ def _phase2_postprocess_dependencies(db, validated, debug_cb):
         ))
         stored += 1
 
-    debug_cb(f"  Dependencies stored: {stored} (removed {len(redundant)} transitive)")
+    from ..error_utils import log_info
+    log_info(debug_cb, "Dependencies stored", f"{stored} (removed {len(redundant)} transitive)")
 
     # Detect remaining cycles (co-requisites) — check both new candidates and pre-existing DB edges
     cycles_found = 0
@@ -299,7 +304,8 @@ def _phase2_postprocess_dependencies(db, validated, debug_cb):
                     (pre, dep),
                 )
                 cycles_found += 1
-        debug_cb(f"  Co-requisite cycles found: {cycles_found}")
+        from ..error_utils import log_info
+        log_info(debug_cb, "Co-requisite cycles", f"{cycles_found} found")
 
 
 # ============================================================

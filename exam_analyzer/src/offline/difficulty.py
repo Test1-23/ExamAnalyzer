@@ -75,7 +75,8 @@ def assess_difficulty(db: QADatabase, client, verb_data: dict, debug_cb, progres
     total_diff = sum(diff_map.values())
     if total_diff > 0:
         b = diff_map.get("basic", 0); i = diff_map.get("intermediate", 0); a = diff_map.get("advanced", 0)
-        debug_cb(f"  [Diff] QA difficulty: basic={b}, intermediate={i}, advanced={a} "
+        from ..error_utils import log_info
+        log_info(debug_cb, "QA difficulty", f"basic={b}, intermediate={i}, advanced={a} "
                  f"({b/total_diff*100:.0f}/{i/total_diff*100:.0f}/{a/total_diff*100:.0f})")
     topic_rows = db.conn.execute(
         "SELECT COUNT(*) as cnt FROM topic_difficulty"
@@ -84,7 +85,8 @@ def assess_difficulty(db: QADatabase, client, verb_data: dict, debug_cb, progres
         "SELECT COUNT(*) as cnt FROM topic_difficulty WHERE mode_difficulty = 'mixed'"
     ).fetchone()
     if topic_rows:
-        debug_cb(f"  [Diff] Topic difficulty: {topic_rows['cnt']} topics assessed, "
+        from ..error_utils import log_info
+        log_info(debug_cb, "Topic difficulty", f"{topic_rows['cnt']} topics assessed, "
                  f"{mixed_rows['cnt']} mixed" if mixed_rows and mixed_rows['cnt'] > 0 else "")
 
     _log.info("Task 3: Complete")
@@ -143,7 +145,8 @@ def _phase1_difficulty_benchmark(db, qas, client, debug_cb):
             if 0 <= idx < len(batch):
                 labels[batch[idx]["id"]] = r.get("difficulty", "intermediate")
 
-    debug_cb(f"  Difficulty benchmark: {len(labels)} QAs rated by Flash")
+    from ..error_utils import log_info
+    log_info(debug_cb, "Difficulty benchmark", f"{len(labels)} QAs rated by Flash")
     return candidates, labels
 
 
@@ -211,7 +214,8 @@ def _phase2_calibrate_signals(db, qas, anchors, anchor_labels, verb_data, debug_
         if "intermediate" in medians and "advanced" in medians:
             boundaries[f"{signal}_inter_adv"] = (medians["intermediate"] + medians["advanced"]) / 2
 
-    debug_cb(f"  Difficulty boundaries: {json.dumps({k: round(v, 3) for k, v in boundaries.items()})}")
+    from ..error_utils import log_info
+    log_info(debug_cb, "Difficulty boundaries", f"{json.dumps({k: round(v, 3) for k, v in boundaries.items()})}")
     return boundaries
 
 
@@ -343,7 +347,8 @@ def _phase3_classify_and_confirm(db, qas, boundaries, client, verb_data, debug_c
 
     # Flash confirm boundary cases
     if boundary_cases:
-        debug_cb(f"  Flash confirming {len(boundary_cases)} boundary difficulty cases...")
+        from ..error_utils import log_info
+        log_info(debug_cb, "Flash confirm difficulty", f"{len(boundary_cases)} boundary cases...")
         for b in range(0, len(boundary_cases), 10):
             batch = boundary_cases[b:b+10]
             lang = detect_content_lang(" ".join(qa["question_text"] for qa in batch))
@@ -377,7 +382,8 @@ def _phase3_classify_and_confirm(db, qas, boundaries, client, verb_data, debug_c
                         )
                         classification_method[qa["id"]] = "flash_boundary"
 
-    debug_cb(f"  Difficulty: {len(qas)} QAs classified "
+    from ..error_utils import log_info
+    log_info(debug_cb, "Difficulty", f"{len(qas)} QAs classified "
              f"(hybrid={sum(1 for v in classification_method.values() if v in ('hybrid', 'flash_boundary'))}, "
              f"flash_only={sum(1 for v in classification_method.values() if v == 'flash_only')})")
 

@@ -78,7 +78,8 @@ def auto_discover_pitfalls(db: QADatabase, kp_id: str, debug_cb=None) -> list[di
             ))
     if debug_cb and patterns:
         top = patterns[0]
-        debug_cb(f"  [DX] KP {kp_id}: {len(patterns)} pitfalls "
+        from ..error_utils import log_info
+        log_info(debug_cb, "KP pitfalls", f"{kp_id}: {len(patterns)} pitfalls "
                  f"(top: \"{top['pattern'][:80]}\" x{top['count']})")
     return patterns
 
@@ -121,7 +122,8 @@ def compute_exam_trends(db: QADatabase, debug_cb=None) -> int:
             years_seen.add(r["year"])
             trend_count += 1
         if len(years_seen) >= 3 and debug_cb:
-            debug_cb(f"  Trend for {kp_id}: {len(years_seen)} years, "
+            from ..error_utils import log_info
+            log_info(debug_cb, "Trend", f"{kp_id}: {len(years_seen)} years, "
                      f"{sum(r['cnt'] for r in rows)} total occurrences")
     if debug_cb:
         multi_year = sum(1 for kp in kps if len(set(
@@ -129,7 +131,8 @@ def compute_exam_trends(db: QADatabase, debug_cb=None) -> int:
                 "SELECT year FROM exam_trends WHERE kp_id = ?", (kp["id"],)
             ).fetchall()
         )) >= 3)
-        debug_cb(f"  [DX] Trends: {trend_count} year-rows across {len(kps)} KPs "
+        from ..error_utils import log_info
+        log_info(debug_cb, "Trends", f"{trend_count} year-rows across {len(kps)} KPs "
                  f"({multi_year} KPs with >= 3 years data)")
     return trend_count
 

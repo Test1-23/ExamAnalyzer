@@ -92,7 +92,8 @@ def _run_migration_cycle(db: QADatabase, debug_cb=None) -> int:
     ).fetchone()["cnt"]
     if total_help < 20:
         if debug_cb:
-            debug_cb(f"  Migration: too few help entries ({total_help}), skipping")
+            from ..error_utils import log_info
+            log_info(debug_cb, "Migration", f"too few help entries ({total_help}), skipping")
         return 0
 
     threshold = _get_migration_threshold(total_help)
@@ -150,9 +151,11 @@ def _run_migration_cycle(db: QADatabase, debug_cb=None) -> int:
                 db.topic.set_fragment_membership(fid, dst_topic, loyalty=0.5)
                 migrated += 1
             if debug_cb:
-                debug_cb(f"  Migration: {len(fids)} fragments {src_topic} -> {dst_topic}")
+                from ..error_utils import log_info
+                log_info(debug_cb, "Migration", f"{len(fids)} fragments {src_topic} -> {dst_topic}")
         elif debug_cb:
-            debug_cb(f"  Migration deferred: {len(fids)} fragments {src_topic} -> "
+            from ..error_utils import log_info
+            log_info(debug_cb, "Migration deferred", f"{len(fids)} fragments {src_topic} -> "
                      f"{dst_topic} (need {batch_threshold}, have {len(fids)})")
     return migrated
 
@@ -227,7 +230,8 @@ def _update_topic_stats(db: QADatabase, debug_cb=None) -> int:
         stable = db.conn.execute(
             "SELECT COUNT(*) as cnt FROM dynamic_topics WHERE quality='stable'"
         ).fetchone()["cnt"]
-        debug_cb(f"  Topic stats: {updated} topics, {forming} forming, {stable} stable")
+        from ..error_utils import log_info
+        log_info(debug_cb, "Topic stats", f"{updated} topics, {forming} forming, {stable} stable")
     return updated
 
 
