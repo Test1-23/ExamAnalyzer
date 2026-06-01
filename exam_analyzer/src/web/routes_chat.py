@@ -65,8 +65,9 @@ def chat():
     history = []
     try:
         history = retriever.db.chat.get_history(session_id)
-    except Exception:
-        _log.debug("Failed to load chat history", exc_info=True)
+    except Exception as e:
+        from src.error_utils import log_exception
+        log_exception(_log, "Chat history", "", e, level="warning")
 
     analysis = agent_query_analyst(question, lang, client)
     keywords = analysis.get("keywords", [])
@@ -151,10 +152,12 @@ def chat():
                     kp_ids = retriever.db.kp.get_kp_ids_for_qa(qa["id"])
                     for kp_id in kp_ids:
                         retriever.db.student.record_trajectory(session_id, kp_id, "new", "learning", "chat_question")
-                except Exception:
-                    _log.debug("Failed to record trajectory", exc_info=True)
-    except Exception:
-        _log.debug("Failed to load student knowledge state", exc_info=True)
+                except Exception as e:
+                    from src.error_utils import log_exception
+                    log_exception(_log, "Record trajectory", "", e, level="warning")
+    except Exception as e:
+        from src.error_utils import log_exception
+        log_exception(_log, "Student knowledge state", "", e, level="warning")
 
     sources = []
     for qa in relevant[:5]:

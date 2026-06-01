@@ -124,8 +124,9 @@ def knowledge_graph():
             for src in merged:
                 edges.append({"source": src, "target": r["name"] or r["topic_id"],
                               "type": "merged_from", "confidence": "medium"})
-    except Exception:
-        _log.debug("Failed to load knowledge graph evolution data", exc_info=True)
+    except Exception as e:
+        from src.error_utils import log_exception
+        log_exception(_log, "Knowledge graph data", "", e, level="warning")
 
     return jsonify({"nodes": nodes, "edges": edges})
 
