@@ -704,6 +704,81 @@ class TestPipelineInit:
         # First progress should be "Initializing..."
         assert any("Initializing" in msg for _, msg in progress_calls)
 
+    def test_phase1_completes_one_paper(self, mock_flash, mock_embedding,
+                                          tmp_path, monkeypatch):
+        """run_pipeline → 1 paper → Phase 1 completes → QAs in DB."""
+        from src.pipeline import run_pipeline
+        from src.knowledge_base import QADatabase
+
+        # 1. Create paired files
+        qp = tmp_path / "9709_s01_qp_01.pdf"
+        ms = tmp_path / "9709_s01_ms_01.pdf"
+        qp.write_text("fake")
+        ms.write_text("fake")
+        out = tmp_path / "out.txt"
+
+        # 2. Mock heavy dependencies
+        monkeypatch.setattr(
+            "src.pipeline.create_client", lambda url, key: None)
+        monkeypatch.setattr(
+            "src.pipeline.extract_pdf",
+            lambda path: type("FakePDF", (), {"pages": ["page1"]})())
+        monkeypatch.setattr(
+            "src.pipeline.stage2_qa_pairing",
+            lambda pair, client, debug: [
+                type("QA", (), {
+                    "question_text": "What is binary?",
+                    "answer_text": "Base-2 number system.",
+                    "question_number": "1",
+                    "parent_question": "",
+                })()
+            ])
+        monkeypatch.setattr(
+            "src.pipeline._generate_summary",
+            lambda qt, at, cl, dbg, **kw: ("Summary of Binary", "Binary"))
+        monkeypatch.setattr(
+            "src.pipeline._extract_ms_fragments",
+            lambda at, qid, cl, dbg: [
+                {"point_id": "f1", "qa_id": qid, "point_text": "Base-2", "marks": 1}
+            ])
+        monkeypatch.setattr(
+            "src.pipeline.log_schema_status", lambda db, debug: None)
+        # Silence post-processing stages (would need real API calls)
+        monkeypatch.setattr(
+            "src.pipeline.run_knowledge_graph", lambda *a, **kw: None)
+        monkeypatch.setattr(
+            "src.pipeline.run_offline_analysis", lambda *a, **kw: None)
+        monkeypatch.setattr(
+            "src.pipeline.run_closed_loop", lambda *a, **kw: None)
+        monkeypatch.setattr(
+            "src.pipeline.run_evolution_cycle", lambda *a, **kw: None)
+        monkeypatch.setattr(
+            "src.pipeline.run_cross_paper_check", lambda *a, **kw: None)
+
+        # 3. Call run_pipeline — 1 paper, no shutdown → complete run
+        result = run_pipeline(
+            api_url="http://mock", api_key="mock-key",
+            input_dir=str(tmp_path), output_path=str(out),
+            intermediate_dir=str(tmp_path),
+            progress_callback=lambda pct, msg: None,
+            log_callback=lambda step, detail: None,
+            debug_callback=lambda msg: None,
+        )
+
+        # 4. Assertions: Phase 1 → QA inserted into DB
+        # pipeline creates {intermediate_dir}/{subject_code}_knowledge.db
+        db_path = tmp_path / "9709_knowledge.db"
+        assert result is not None
+        db = QADatabase(str(db_path))
+        try:
+            assert db.count() > 0, "Phase 1 should insert at least 1 QA"
+            qa = db.get(1)
+            assert qa is not None
+            assert qa["topic"] == "Binary"
+            assert qa["knowledge_summary"] == "Summary of Binary"
+        finally:
+            db.close()
+
 
 # ═══════════════════════════════════════════════════════════════
 # WSD-018-a: auto_split_kp boundary tests
