@@ -97,18 +97,20 @@ class TestQARetriever:
 # Distiller with mock Flash
 # ═══════════════════════════════════════════════════════════════
 
-@pytest.mark.skip(reason="WSD-018-c: Distiller needs deeper investigation — "
-                         "_prepare_topic_items filtering logic changed")
 class TestDistiller:
     """Distiller.run() with mock Flash — verifies the distillation pipeline
     completes without crashing and produces expected output markers."""
 
     def _seed_db(self, db, topics=("Binary", "Hex")):
-        """Insert QAs into multiple topics."""
+        """Insert QAs into multiple topics with realistic weight data."""
         for topic in topics:
             for i in range(3):
-                db.qa.insert(f"Q{i} for {topic}", f"A{i} for {topic}",
-                             topic=topic, paper="paper1", question_number=str(i + 1))
+                qa_id = db.qa.insert(
+                    f"Q{i} for {topic}", f"A{i} for {topic}",
+                    topic=topic, paper="paper1", question_number=str(i + 1))
+                # Record attempts so Beta posterior weights are non-zero
+                # (prevents _prepare_topic_items from skipping low-weight topics)
+                db.qa.record_attempt(qa_id, success=True)
 
     def test_distiller_empty_db(self, mock_db, mock_flash, mock_embedding):
         db = mock_db
@@ -122,13 +124,12 @@ class TestDistiller:
         db = mock_db
         self._seed_db(db, topics=("Binary", "Hex", "Data Compression"))
 
-        # Register Flash responses for distillation stages
-        mock_flash.register("grouped QAs", {
+        # Register Flash responses. The distillation prompt asks to "distill
+        # general knowledge points" — use that as keyword for the batch call.
+        # The review prompt mentions "review" and "extracted content".
+        mock_flash.default = {
             "content": "## Binary\n\nKnowledge about binary numbering.\n\n## Hex\n\nHexadecimal system.\n\n## Data Compression\n\nLossy vs lossless compression.",
-        })
-        mock_flash.register("review", {
-            "content": "## Binary\n\nKnowledge about binary numbering.\n\n## Hex\n\nHexadecimal system.\n\n## Data Compression\n\nLossy vs lossless compression.",
-        })
+        }
 
         d = Distiller(db, client=None, debug=lambda m: None)
         result = d.run()
