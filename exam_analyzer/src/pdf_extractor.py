@@ -27,7 +27,9 @@ def _extract_with_pdfplumber(pdf_path: str) -> ExtractedPDF:
                         ]
                         tables.append(cleaned)
                 page_text = text.strip()
-            except Exception:
+            except Exception as e:
+                from .error_utils import log_exception
+                log_exception(print, "PDF page", f"page={i}", e)
                 page_text = ""
                 tables = []
                 failed_pages.append(i)
@@ -95,6 +97,7 @@ def extract_pdf(pdf_path: str) -> ExtractedPDF:
     try:
         return _extract_with_pdfplumber(pdf_path)
     except Exception as e:
-        print(f"  pdfplumber failed for {os.path.basename(pdf_path)}: {e}")
+        from .error_utils import log_exception
+        log_exception(print, "PDF extract", f"file={os.path.basename(pdf_path)}", e, level="warning")
         print(f"  Falling back to PyMuPDF...")
         return _extract_with_pymupdf(pdf_path)

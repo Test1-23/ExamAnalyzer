@@ -63,7 +63,8 @@ def log_schema_status(db, debug_cb=None):
         fb_cols = [c["name"] for c in db.conn.execute("PRAGMA table_info(question_feedback)").fetchall()]
         _d(f"question_feedback has miss_categories: {'miss_categories' in fb_cols}")
     except Exception as e:
-        _d(f"Schema status check failed: {e}")
+        from .error_utils import log_exception
+        log_exception(_d, "Schema status", "", e)
 
 # ============================================================
 # QARetriever

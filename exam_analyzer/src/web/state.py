@@ -140,10 +140,11 @@ def warmup_chat_retriever():
     def _warmup():
         try:
             get_chat_retriever()
-        except Exception:
+        except Exception as e:
             from src.logger import get_logger
             _log = get_logger()
-            _log.debug("Chat retriever warmup failed (non-critical)", exc_info=True)
+            from src.error_utils import log_exception
+            log_exception(_log, "Chat warmup", "", e, level="warning")
     t = threading.Thread(target=_warmup, daemon=True)
     t.start()
 
@@ -157,8 +158,9 @@ def invalidate_chat_retriever():
     try:
         from src.embedding_cluster import clear_model_cache
         clear_model_cache()
-    except Exception:
-        pass
+    except Exception as e:
+        from src.error_utils import log_exception
+        log_exception(print, "Model cache clear", "", e)
 
 
 def get_kp_cache():
