@@ -175,7 +175,8 @@ def _place_qa_vector_from_kp_scores(db: QADatabase, qa_id: int,
     for fr in frag_rows:
         db.fragment.upsert_centrality(fr["point_id"], centrality, best_score, 0.5, 0.0)
 
-    debug(f"  QA {qa_id}: Topic='{topic}', centrality={centrality}, best_kp={best_kp}({best_score})")
+    from .error_utils import log_info
+    log_info(debug, "QA placement", f"{qa_id}: Topic='{topic}', centrality={centrality}, best_kp={best_kp}({best_score})")
 
 
 
@@ -301,7 +302,8 @@ def _run_kp_refinement(db, client, debug):
         consistency = cross_kp_consistency(db, all_kp_ids[:30], client, debug_cb=debug)
         merged_count = auto_merge_kps(db, consistency.get("issues", []), debug_cb=debug)
         if merged_count:
-            debug(f"Auto-merge: {merged_count} KP pairs merged")
+            from .error_utils import log_info
+            log_info(debug, "Auto-merge", f"{merged_count} KP pairs merged")
     debug("KP structural refinement complete (behavior-driven split/merge/consistency)")
 
 
@@ -536,7 +538,8 @@ def _process_one_question_inner(qa, wmap, extopics, ctx: PipelineContext):
     _step_fragment_and_kp(qa, qa_id, topic, used_ids, covered,
                            missed_texts, ctx)
 
-    ctx.debug(f"  Q{qn}: retrieved={len(all_similar)}, shown={len(top_similar)}, "
+    from .error_utils import log_info
+    log_info(ctx.debug, f"Q{qn}", f"retrieved={len(all_similar)}, shown={len(top_similar)}, "
               f"used={len(used_indices)}, topic={topic}, "
               f"covered={len(covered)}, missed={len(missed_texts)}")
     return (qa_id, summary, cross_refs)
@@ -586,7 +589,8 @@ def run_pipeline(
     order_desc = " → ".join(f"{p[2]}({_parse_year(p[2])})" for p in pairs[:10])
     if len(pairs) > 10:
         order_desc += f" ... (+{len(pairs)-10} more)"
-    _debug(f"Pairs: {len(pairs)} — order: {order_desc}")
+    from .error_utils import log_info
+    log_info(_debug, "Pairing", f"{len(pairs)} pairs - order: {order_desc}")
     _log("Pairing", f"{len(pairs)} pairs")
     if not pairs:
         raise RuntimeError(f"No paired papers found in {input_dir}")
@@ -596,14 +600,16 @@ def run_pipeline(
     if m:
         subject_code = m.group(1)
     else:
-        _debug(f"Could not extract subject code from: {pairs[0][2]}, using 'unknown'")
+        from .error_utils import log_info
+        log_info(_debug, "Subject code", f"Could not extract from: {pairs[0][2]}, using 'unknown'")
 
     out_dir = os.path.dirname(output_path) or "."
     subject_output = os.path.join(out_dir, f"{subject_code}_points.txt")
     db_path = os.path.join(intermediate_dir, f"{subject_code}_knowledge.db")
     processed_path = os.path.join(intermediate_dir, f"{subject_code}_processed.json")
 
-    _debug(f"Subject: {subject_code}, output: {subject_output}")
+    from .error_utils import log_info
+    log_info(_debug, "Subject", f"{subject_code}, output: {subject_output}")
     _log("Subject", subject_code)
 
     db = QADatabase(db_path)
@@ -617,9 +623,11 @@ def run_pipeline(
         try:
             with open(processed_path, "r") as f:
                 processed = set(json.load(f))
-            _debug(f"Processed files: {len(processed)}")
+            from .error_utils import log_info
+            log_info(_debug, "Processed", f"{len(processed)} files")
         except Exception as e:
-            _debug(f"Failed to read processed.json: {e}")
+            from .error_utils import log_info
+            log_info(_debug, "Processed", f"Failed to read: {e}")
 
     client = create_client(api_url, api_key)
     is_first = (db.count() == 0)
@@ -633,7 +641,8 @@ def run_pipeline(
             break
 
         if display_name in processed:
-            _debug(f"[{display_name}] Already processed, skipping")
+            from .error_utils import log_info
+            log_info(_debug, display_name, "Already processed, skipping")
             _log(f"  SKIP {display_name}", "already processed")
             continue
 
@@ -642,12 +651,14 @@ def run_pipeline(
         # Resolve exam session for time-dimension queries
         session_id = _ensure_session(db, display_name)
 
-        _debug(f"[{display_name}] PDF extraction + QA pairing...")
+        from .error_utils import log_info
+        log_info(_debug, display_name, "PDF extraction + QA pairing...")
         try:
             qp_pdf = extract_pdf(qp_path)
             ms_pdf = extract_pdf(ms_path)
         except Exception as e:
-            _debug(f"[{display_name}] PDF extraction failed: {e}, skipping")
+            from .error_utils import log_info
+            log_info(_debug, display_name, f"PDF extraction failed: {e}, skipping")
             counters.pdf_extraction += 1
             continue
 
@@ -655,16 +666,19 @@ def run_pipeline(
         try:
             qa_pairs = stage2_qa_pairing(pair, client, _debug)
         except Exception as e:
-            _debug(f"[{display_name}] QA pairing failed: {e}, skipping")
+            from .error_utils import log_info
+            log_info(_debug, display_name, f"QA pairing failed: {e}, skipping")
             counters.qa_pairing += 1
             continue
 
         if not qa_pairs:
-            _debug(f"[{display_name}] No QA pairs found, skipping")
+            from .error_utils import log_info
+            log_info(_debug, display_name, "No QA pairs found, skipping")
             continue
 
         if is_first:
-            _debug(f"[{display_name}] Phase1: building KB ({len(qa_pairs)} questions)")
+            from .error_utils import log_info
+            log_info(_debug, display_name, f"Phase1: building KB ({len(qa_pairs)} questions)")
 
             existing_topics = _get_existing_topics(db) if db.count() > 0 else None
 
@@ -681,18 +695,21 @@ def run_pipeline(
                         future.result()
                     except Exception as e:
                         qa = futures[future]
-                        _debug(f"  Q{qa.question_number} Phase1 failed: {e}")
+                        from .error_utils import log_info
+                        log_info(_debug, "Phase1 worker", f"Q{qa.question_number} failed: {e}")
                         counters.phase1_worker += 1
                         tracker.step("")  # count failure too
 
-            _debug(f"[{display_name}] KB: {db.count()} entries")
+            from .error_utils import log_info
+            log_info(_debug, display_name, f"KB: {db.count()} entries")
             is_first = False
             _debug("Loading embedding model for retrieval (first run may download ~80MB)...")
             retriever.rebuild()
             _debug("Embedding model ready")
 
         else:
-            _debug(f"[{display_name}] Phase2: parallel test-learn ({len(qa_pairs)} questions)")
+            from .error_utils import log_info
+            log_info(_debug, display_name, f"Phase2: parallel test-learn ({len(qa_pairs)} questions)")
 
             # Pre-load QA weights + existing topics for retrieval-augmented summary
             weight_map = db.qa.get_all_weights()
@@ -717,7 +734,8 @@ def run_pipeline(
                             topic_links[(src, dst)] = topic_links.get((src, dst), 0) + count
                     except Exception as e:
                         qa = futures[future]
-                        _debug(f"  Q{qa.question_number} thread failed: {e}")
+                        from .error_utils import log_info
+                        log_info(_debug, "Phase2 worker", f"Q{qa.question_number} failed: {e}")
                         counters.phase2_worker += 1
                         tracker.step("")  # count failure too
 
@@ -725,13 +743,15 @@ def run_pipeline(
                 if qa_id is not None:
                     retriever.add_qa(qa_id, summary)
 
-            _debug(f"[{display_name}] KB: {db.count()} entries")
+            from .error_utils import log_info
+            log_info(_debug, display_name, f"KB: {db.count()} entries")
 
             # Phase 2 summary: per-paper success/failure + retrieval quality
             total = len(qa_pairs)
             succeeded = len(qa_results)
             if succeeded < total:
-                _debug(f"  [Phase2] {display_name}: {succeeded}/{total} questions succeeded, {total - succeeded} failed")
+                from .error_utils import log_info
+                log_info(_debug, display_name, f"Phase2: {succeeded}/{total} succeeded, {total - succeeded} failed")
 
             try:
                 fb_rows = db.conn.execute(
@@ -743,7 +763,8 @@ def run_pipeline(
                 ).fetchone()
                 if fb_rows and fb_rows["tot_ret"]:
                     utility = fb_rows["tot_used"] / fb_rows["tot_ret"] * 100 if fb_rows["tot_ret"] else 0
-                    _debug(f"  [Phase2] {display_name}: retrieved={fb_rows['tot_ret']}, "
+                    from .error_utils import log_info
+                    log_info(_debug, display_name, f"Phase2 stats: retrieved={fb_rows['tot_ret']}, "
                            f"used={fb_rows['tot_used']} (utility={utility:.0f}%), "
                            f"covered={fb_rows['tot_cov']}, missed={fb_rows['tot_miss']}")
 
@@ -763,11 +784,14 @@ def run_pipeline(
                             for k in totals:
                                 totals[k] += cats.get(k, 0)
                         except Exception as e:
-                            _debug(f"miss_categories parse: {e}")
-                    _debug(f"  [MissCat] {display_name}: " +
+                            from .error_utils import log_info
+                            log_info(_debug, "Stats", f"miss_categories parse: {e}")
+                    from .error_utils import log_info
+                    log_info(_debug, display_name, "MissCat: " +
                            ", ".join(f"{k}={v}" for k, v in totals.items() if v > 0))
             except Exception as e:
-                _debug(f"Phase2 stats collection: {e}")
+                from .error_utils import log_info
+                log_info(_debug, "Stats", f"Phase2 stats collection: {e}")
 
         # Link QAs to exam session for time-dimension queries
         if session_id:
@@ -782,13 +806,15 @@ def run_pipeline(
             with open(processed_path, "w") as f:
                 json.dump(sorted(processed), f)
         except Exception as e:
-            _debug(f"Failed to write processed.json: {e}")
+            from .error_utils import log_info
+            log_info(_debug, "Processed", f"Failed to write: {e}")
 
         # Cross-paper consistency check after each paper
         try:
             run_cross_paper_check(db, display_name, debug_callback=_debug)
         except Exception as e:
-            _debug(f"Cross-paper check failed (non-fatal): {e}")
+            from .error_utils import log_info
+            log_info(_debug, "Cross-paper check", f"failed (non-fatal): {e}")
             counters.cross_paper_check += 1
 
     # -- Compute topic_related + groups (read-only, before post-processing try block) --
@@ -868,7 +894,8 @@ def run_pipeline(
         ("Evolution cycle", lambda: run_evolution_cycle(db, client, _debug)),
     ]:
         try:
-            _debug(f"Running {label.lower()}...")
+            from .error_utils import log_info
+            log_info(_debug, label, "Starting...")
             _log(label, "Starting")
             stage_fn()
         except Exception as e:
@@ -878,7 +905,8 @@ def run_pipeline(
     # ── End-of-pipeline failure summary ──
     failure_summary = counters.summarize()
     if failure_summary != "none":
-        _debug(f"[Pipeline] Stage failures: {failure_summary}")
+        from .error_utils import log_info
+        log_info(_debug, "Pipeline", f"Stage failures: {failure_summary}")
     else:
         _debug("[Pipeline] Stage failures: none")
 
