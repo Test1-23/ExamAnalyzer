@@ -779,9 +779,78 @@ class TestPipelineInit:
         finally:
             db.close()
 
+    def test_two_papers_both_processed(self, mock_flash, mock_embedding,
+                                         tmp_path, monkeypatch):
+        """run_pipeline → 2 papers → both processed → QAs from both papers."""
+        from src.pipeline import run_pipeline
+        from src.knowledge_base import QADatabase
 
-# ═══════════════════════════════════════════════════════════════
-# WSD-018-a: auto_split_kp boundary tests
+        # 1. Create 2 paired files (different papers)
+        for i in [1, 2]:
+            qp = tmp_path / f"9709_s0{i}_qp_{i:02d}.pdf"
+            ms = tmp_path / f"9709_s0{i}_ms_{i:02d}.pdf"
+            qp.write_text("fake")
+            ms.write_text("fake")
+        out = tmp_path / "out.txt"
+
+        # 2. Mock heavy dependencies (same as Session B)
+        monkeypatch.setattr(
+            "src.pipeline.create_client", lambda url, key: None)
+        monkeypatch.setattr(
+            "src.pipeline.extract_pdf",
+            lambda path: type("FakePDF", (), {"pages": ["page1"]})())
+        monkeypatch.setattr(
+            "src.pipeline.stage2_qa_pairing",
+            lambda pair, client, debug: [
+                type("QA", (), {
+                    "question_text": f"Q{i} for {pair.display_name}",
+                    "answer_text": f"A{i}",
+                    "question_number": str(i + 1),
+                    "parent_question": "",
+                })() for i in range(2)
+            ])
+        monkeypatch.setattr(
+            "src.pipeline._generate_summary",
+            lambda qt, at, cl, dbg, **kw: (f"Summary: {qt[:30]}", "TestTopic"))
+        monkeypatch.setattr(
+            "src.pipeline._extract_ms_fragments",
+            lambda at, qid, cl, dbg: [
+                {"point_id": "f1", "qa_id": qid, "point_text": "text", "marks": 1}
+            ])
+        monkeypatch.setattr(
+            "src.pipeline.log_schema_status", lambda db, debug: None)
+        monkeypatch.setattr(
+            "src.pipeline.run_knowledge_graph", lambda *a, **kw: None)
+        monkeypatch.setattr(
+            "src.pipeline.run_offline_analysis", lambda *a, **kw: None)
+        monkeypatch.setattr(
+            "src.pipeline.run_closed_loop", lambda *a, **kw: None)
+        monkeypatch.setattr(
+            "src.pipeline.run_evolution_cycle", lambda *a, **kw: None)
+        monkeypatch.setattr(
+            "src.pipeline.run_cross_paper_check", lambda *a, **kw: None)
+
+        # 3. Call run_pipeline — 2 papers, no shutdown
+        result = run_pipeline(
+            api_url="http://mock", api_key="mock-key",
+            input_dir=str(tmp_path), output_path=str(out),
+            intermediate_dir=str(tmp_path),
+            progress_callback=lambda pct, msg: None,
+            log_callback=lambda step, detail: None,
+            debug_callback=lambda msg: None,
+        )
+
+        # 4. Assertions: QAs from both papers in DB
+        db_path = tmp_path / "9709_knowledge.db"
+        assert result is not None
+        db = QADatabase(str(db_path))
+        try:
+            assert db.count() >= 2, f"Expected >= 2 QAs, got {db.count()}"
+            # First paper runs Phase 1, second runs Phase 2 — both produce QAs
+            papers = {qa["paper"] for qa in db.qa.get_all()}
+            assert len(papers) >= 2, f"Expected QAs from >= 2 papers, got {papers}"
+        finally:
+            db.close()
 # ═══════════════════════════════════════════════════════════════
 
 
