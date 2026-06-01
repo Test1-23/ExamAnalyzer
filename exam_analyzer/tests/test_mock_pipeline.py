@@ -628,3 +628,81 @@ class TestDistillerBoundary:
         from src.distiller import Distiller
         d = Distiller(mock_db, None, None)
         assert d is not None
+
+
+# ═══════════════════════════════════════════════════════════════
+# WSD-017 — run_pipeline() initialization path test
+# ═══════════════════════════════════════════════════════════════
+
+
+class TestPipelineInit:
+    """Verify run_pipeline() control-flow skeleton does not crash."""
+
+    def test_init_reaches_paper_loop(self, mock_db, mock_flash, mock_embedding,
+                                      tmp_path, monkeypatch):
+        """run_pipeline() → init → paper loop entry → shutdown cleanly."""
+        from src.pipeline import run_pipeline
+        import threading
+
+        # 1. Create minimal paired files (format: {prefix}_qp_{variant}.pdf)
+        qp = tmp_path / "9709_s01_qp_01.pdf"
+        ms = tmp_path / "9709_s01_ms_01.pdf"
+        qp.write_text("fake pdf content")
+        ms.write_text("fake pdf content")
+        out = tmp_path / "out.txt"
+
+        # 2. Mock heavy dependencies so no real API/PDF processing happens
+        monkeypatch.setattr(
+            "src.pipeline.create_client",
+            lambda url, key: None)
+        monkeypatch.setattr(
+            "src.pipeline.extract_pdf",
+            lambda path: type("FakePDF", (), {"pages": ["page1"]})())
+        monkeypatch.setattr(
+            "src.pipeline.stage2_qa_pairing",
+            lambda pair, client, debug: [
+                type("QA", (), {
+                    "question_text": "Q1",
+                    "answer_text": "A1",
+                    "question_number": "1",
+                    "parent_question": "",
+                })()
+            ])
+        monkeypatch.setattr(
+            "src.pipeline._generate_summary",
+            lambda qt, at, cl, dbg, **kw: ("summary", "Topic"))
+        monkeypatch.setattr(
+            "src.pipeline._extract_ms_fragments",
+            lambda at, qid, cl, dbg: [
+                {"point_id": "f1", "qa_id": qid, "point_text": "text", "marks": 1}
+            ])
+        monkeypatch.setattr(
+            "src.pipeline.log_schema_status",
+            lambda db, debug: None)
+
+        # 3. Shutdown event to stop after first paper
+        shutdown = threading.Event()
+        shutdown.set()
+
+        # 4. Capture callbacks
+        progress_calls = []
+        log_calls = []
+
+        # 5. Call run_pipeline — should init, enter loop, hit shutdown, return
+        result = run_pipeline(
+            api_url="http://mock",
+            api_key="mock-key",
+            input_dir=str(tmp_path),
+            output_path=str(out),
+            intermediate_dir=str(tmp_path),
+            progress_callback=lambda pct, msg: progress_calls.append((pct, msg)),
+            log_callback=lambda step, detail: log_calls.append((step, detail)),
+            debug_callback=lambda msg: None,
+            shutdown_event=shutdown,
+        )
+
+        # 6. Assertions: init completed and shutdown was reached
+        assert result is not None
+        assert len(progress_calls) > 0  # at least one progress callback
+        # First progress should be "Initializing..."
+        assert any("Initializing" in msg for _, msg in progress_calls)
