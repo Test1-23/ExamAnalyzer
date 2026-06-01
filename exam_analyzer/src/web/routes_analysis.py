@@ -76,7 +76,7 @@ def start_analysis():
                     state.analysis_state["progress"] = pct
                     state.analysis_state["status"] = status_text
 
-            result_content = run_pipeline(
+            result = run_pipeline(
                 api_url=api_url, api_key=api_key,
                 input_dir=state.INPUT_DIR, output_path=state.POINTS_FILE,
                 intermediate_dir=os.path.join(state.THIS_DIR, "intermediate"),
@@ -84,11 +84,15 @@ def start_analysis():
                 debug_callback=state.debug, log_callback=state.log_step,
                 shutdown_event=state.shutdown_event,
             )
-            state.log_step("分析完成", f"知识点已写入 {state.POINTS_FILE}")
+            if result.healthy:
+                state.log_step("分析完成", f"知识点已写入 {state.POINTS_FILE}")
+            else:
+                failures = result.counters.total_failures()
+                state.log_step("分析完成", f"知识点已写入 {state.POINTS_FILE} (⚠️ {failures} 个阶段有失败)")
             with state._state_lock:
                 state.analysis_state["progress"] = 100
                 state.analysis_state["status"] = "分析完成"
-                state.analysis_state["result"] = result_content
+                state.analysis_state["result"] = result.content
                 state.analysis_state["error"] = None
             state.warmup_chat_retriever()
         except Exception as e:

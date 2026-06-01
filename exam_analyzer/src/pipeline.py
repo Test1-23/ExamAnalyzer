@@ -239,19 +239,47 @@ class StageCounters:
         self.cross_paper_check = 0
         self.post_processing = 0
         self.stage_list = 0
+        self.total_retries = 0
+
+    _fields = (
+        "pdf_extraction", "qa_pairing", "phase1_worker", "phase2_worker",
+        "answer_round1", "grade_round2", "fragment_extraction",
+        "kp_classification", "cross_paper_check", "post_processing",
+        "stage_list",
+    )
 
     def summarize(self) -> str:
         parts = []
-        for field in (
-            "pdf_extraction", "qa_pairing", "phase1_worker", "phase2_worker",
-            "answer_round1", "grade_round2", "fragment_extraction",
-            "kp_classification", "cross_paper_check", "post_processing",
-            "stage_list",
-        ):
+        for field in self._fields:
             v = getattr(self, field)
             if v > 0:
                 parts.append(f"{field}={v}")
+        if self.total_retries > 0:
+            parts.append(f"retries={self.total_retries}")
         return ", ".join(parts) if parts else "none"
+
+    def total_failures(self) -> int:
+        return sum(getattr(self, f) for f in self._fields)
+
+    @property
+    def healthy(self) -> bool:
+        return self.total_failures() == 0
+
+
+@dataclass(frozen=True)
+class PipelineResult:
+    """Return value of run_pipeline() — content + counters for programmatic use.
+
+    ``content`` is the formatted analysis text (unchanged from before).
+    ``counters`` is the StageCounters with per-stage failure/retry data.
+    ``healthy`` is True when zero failures occurred.
+    """
+    content: str
+    counters: StageCounters
+
+    @property
+    def healthy(self) -> bool:
+        return self.counters.healthy
 
 
 _FILENAME_RE = re.compile(r'^(\d+)_([smw])(\d{2})_(\d+)')
@@ -912,6 +940,6 @@ def run_pipeline(
 
     _progress(100, "Analysis complete")
     db.close()
-    return content
+    return PipelineResult(content=content, counters=counters)
 
 
