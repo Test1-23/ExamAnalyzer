@@ -35,6 +35,9 @@ def find_points_file() -> str:
 # Analysis state
 # ---------------------------------------------------------------------------
 
+MAX_DEBUG_LOG = 1000
+MAX_TIMELINE = 500
+
 analysis_state: dict = {
     "running": False,
     "progress": 0,
@@ -62,35 +65,43 @@ def update_analysis_state(**kwargs):
 
 
 def append_debug_log(message: str):
-    """Append a timestamped debug message."""
+    """Append a timestamped debug message (capped at MAX_DEBUG_LOG entries)."""
     ts = datetime.now().strftime("%H:%M:%S")
     with _state_lock:
         analysis_state.setdefault("debug_log", []).append(f"[{ts}] {message}")
+        if len(analysis_state["debug_log"]) > MAX_DEBUG_LOG:
+            analysis_state["debug_log"] = analysis_state["debug_log"][-MAX_DEBUG_LOG:]
 
 
 def append_timeline(step: str, detail: str = ""):
-    """Append a timestamped timeline entry."""
+    """Append a timestamped timeline entry (capped at MAX_TIMELINE entries)."""
     now = datetime.now().strftime("%H:%M:%S")
     entry = {"time": now, "step": step, "detail": detail}
     with _state_lock:
         analysis_state.setdefault("timeline", []).append(entry)
+        if len(analysis_state["timeline"]) > MAX_TIMELINE:
+            analysis_state["timeline"] = analysis_state["timeline"][-MAX_TIMELINE:]
 
 
 def debug(msg: str):
-    """Log debug message to console + analysis state (replaces app._debug)."""
+    """Log debug message to console + analysis state (capped at MAX_DEBUG_LOG entries)."""
     ts = datetime.now().strftime("%H:%M:%S")
     print(f"[{ts}] {msg}")
     with _state_lock:
         analysis_state.setdefault("debug_log", []).append(f"[{ts}] {msg}")
+        if len(analysis_state["debug_log"]) > MAX_DEBUG_LOG:
+            analysis_state["debug_log"] = analysis_state["debug_log"][-MAX_DEBUG_LOG:]
 
 
 def log_step(step: str, detail: str = ""):
-    """Log a timestamped timeline entry (replaces app._log_step)."""
+    """Log a timestamped timeline entry (capped at MAX_TIMELINE entries)."""
     now = datetime.now().strftime("%H:%M:%S")
     entry = {"time": now, "step": step, "detail": detail}
     print(f"[{now}] {step}" + (f" — {detail}" if detail else ""))
     with _state_lock:
         analysis_state.setdefault("timeline", []).append(entry)
+        if len(analysis_state["timeline"]) > MAX_TIMELINE:
+            analysis_state["timeline"] = analysis_state["timeline"][-MAX_TIMELINE:]
 
 
 # ---------------------------------------------------------------------------

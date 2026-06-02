@@ -106,3 +106,17 @@ EDGE_FUSION_SEMANTIC_W = _FLT("EXAM_EDGE_FUSION_SW", 0.3)
 EDGE_FUSION_SEQUENTIAL_W = _FLT("EXAM_EDGE_FUSION_SQW", 0.15)
 EDGE_FUSION_LEARNING_PATH_W = _FLT("EXAM_EDGE_FUSION_LPW", 0.15)
 EDGE_TRANSITION_DIVISOR = _INT("EXAM_EDGE_TRANSITION_DIV", 10)
+
+# ============================================================
+# Knowledge Graph Clustering & Naming
+# ============================================================
+KG_CLUSTER_THRESHOLD = _FLT("EXAM_KG_CLUSTER_THRESHOLD", 0.70)
+KG_NAMING_BATCH_SIZE = _INT("EXAM_KG_NAMING_BATCH", 5)
+
+# ============================================================
+# Knowledge Graph Edge Discovery Thresholds
+# ============================================================
+KG_SEQUENTIAL_MIN_PAPERS = _INT("EXAM_KG_SEQUENTIAL_MIN_PAPERS", 3)
+KG_LEARNING_PATH_MIN_STUDENTS = _INT("EXAM_KG_LEARNING_PATH_MIN_STUDENTS", 3)
+KG_SEMANTIC_EDGE_THRESHOLD = _FLT("EXAM_KG_SEMANTIC_EDGE_THRESHOLD", 0.5)
+KG_SEMANTIC_EDGE_MEDIUM_THRESHOLD = _FLT("EXAM_KG_SEMANTIC_EDGE_MEDIUM", 0.65)

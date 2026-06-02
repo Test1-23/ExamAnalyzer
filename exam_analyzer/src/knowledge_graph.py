@@ -19,6 +19,9 @@ from .constants import (
     EDGE_FUSION_RETRIEVAL_W, EDGE_FUSION_SEMANTIC_W,
     EDGE_FUSION_SEQUENTIAL_W, EDGE_FUSION_LEARNING_PATH_W,
     EDGE_TRANSITION_DIVISOR,
+    KG_CLUSTER_THRESHOLD, KG_NAMING_BATCH_SIZE,
+    KG_SEQUENTIAL_MIN_PAPERS, KG_LEARNING_PATH_MIN_STUDENTS,
+    KG_SEMANTIC_EDGE_THRESHOLD, KG_SEMANTIC_EDGE_MEDIUM_THRESHOLD,
 )
 from .logger import get_logger
 from .utils import get_worker_limit
@@ -95,9 +98,9 @@ def _qn_sort_key(qn: str) -> tuple:
     return (num, suffix)
 
 
-def _build_similarity_graph(qa_vectors, threshold=0.70):
+def _build_similarity_graph(qa_vectors, threshold=KG_CLUSTER_THRESHOLD):
     """Build adjacency graph from QA vectors. Edge if cosine >= threshold.
-    threshold=0.70: 聚类相似度阈值 — ↑更高→更多更小的簇, ↓更低→更少更大的簇"""
+    threshold: 聚类相似度阈值 — ↑更高→更多更小的簇, ↓更低→更少更大的簇"""
     n = len(qa_vectors)
     if n == 0:
         return {}, []
@@ -195,7 +198,7 @@ def cluster_qas(db: QADatabase, debug=None) -> dict:
         debug("KG embedding complete")
 
     # Build similarity graph and find clusters
-    adj, cos_matrix = _build_similarity_graph(qa_vectors, threshold=0.70)
+    adj, cos_matrix = _build_similarity_graph(qa_vectors, threshold=KG_CLUSTER_THRESHOLD)
     clusters, noise = _find_clusters(adj, len(qas))
 
     # Compute centroids and cohesion
@@ -245,7 +248,7 @@ def generate_kps(db: QADatabase, clustering: dict, client, debug=None) -> list[s
         return []
 
     kp_ids = []
-    batch_size = 5
+    batch_size = KG_NAMING_BATCH_SIZE
     batches = [(i, clusters[i:i+batch_size]) for i in range(0, len(clusters), batch_size)]
 
     def _name_batch(batch_start, batch_clusters):
@@ -423,11 +426,11 @@ def _compute_semantic_edges(kp_centroids: dict) -> list[tuple]:
     for i in range(len(kp_ids_list)):
         for j in range(i + 1, len(kp_ids_list)):
             cos = float(cos_mat[i][j])
-            if cos >= 0.5:
+            if cos >= KG_SEMANTIC_EDGE_THRESHOLD:
                 candidates.append((
                     kp_ids_list[i], kp_ids_list[j],
                     round(cos, 3),
-                    "medium" if cos >= 0.65 else "low",
+                    "medium" if cos >= KG_SEMANTIC_EDGE_MEDIUM_THRESHOLD else "low",
                 ))
     return candidates
 
@@ -507,7 +510,7 @@ def discover_sequential_edges(db: QADatabase, clustering: dict, kp_ids: list[str
     for (a, b), count in transitions.items():
         # 时序边: ≥3 场不同考试支持才建立 sequential 边
         num_papers = len(paper_kp_pairs.get((a, b), set()))
-        if num_papers >= 3 and a != b:
+        if num_papers >= KG_SEQUENTIAL_MIN_PAPERS and a != b:
             db.kp.upsert_edge(KpEdgeSpec(
                 source_kp=a, target_kp=b,
                 edge_type="sequential",
@@ -556,7 +559,7 @@ def discover_learning_path_edges(db: QADatabase, kp_ids: list[str],
     edge_count = 0
     for (a, b), count in transitions.items():
         num_students = len(student_pairs.get((a, b), set()))
-        if num_students >= 3 and a != b:
+        if num_students >= KG_LEARNING_PATH_MIN_STUDENTS and a != b:
             db.kp.upsert_edge(KpEdgeSpec(
                 source_kp=a, target_kp=b,
                 edge_type="learning_path",
