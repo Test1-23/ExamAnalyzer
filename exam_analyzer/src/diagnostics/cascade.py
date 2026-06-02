@@ -19,7 +19,7 @@ _log = get_logger()
 # Phase 3: Topic evolution — split, merge, dissolve
 # ═══════════════════════════════════════════════════════════════
 
-def _detect_topic_splits(db: QADatabase, debug_cb=None) -> int:
+def _detect_topic_splits(db: QADatabase, debug=None) -> int:
     """Detect topics with diverging behavioral subgroups and split them."""
     topics = db.conn.execute(
         "SELECT topic_id, mass FROM dynamic_topics WHERE mass >= 6 AND quality != 'dissolved'"
@@ -133,15 +133,15 @@ def _detect_topic_splits(db: QADatabase, debug_cb=None) -> int:
                 (json.dumps([new_id_a, new_id_b]), topic_id),
             )
         splits += 1
-        if debug_cb:
+        if debug:
             from ..error_utils import log_info
-            log_info(debug_cb, "Split", f"{topic_id} -> [{new_id_a}]({len(s1)}) + "
+            log_info(debug, "Split", f"{topic_id} -> [{new_id_a}]({len(s1)}) + "
                      f"[{new_id_b}]({len(s2)})")
 
     return splits
 
 
-def _detect_topic_merges(db: QADatabase, debug_cb=None) -> int:
+def _detect_topic_merges(db: QADatabase, debug=None) -> int:
     """Detect topic pairs with high behavioral overlap and merge them."""
     from .queries import DiagnosticQueries
     dq = DiagnosticQueries(db)
@@ -219,14 +219,14 @@ def _detect_topic_merges(db: QADatabase, debug_cb=None) -> int:
             merged_set.add(a)
             merged_set.add(b)
             merges += 1
-            if debug_cb:
+            if debug:
                 from ..error_utils import log_info
-                log_info(debug_cb, "Merge", f"{a} + {b} -> {new_id} (jaccard={jaccard:.2f})")
+                log_info(debug, "Merge", f"{a} + {b} -> {new_id} (jaccard={jaccard:.2f})")
 
     return merges
 
 
-def _process_dissolved_topics(db: QADatabase, debug_cb=None) -> int:
+def _process_dissolved_topics(db: QADatabase, debug=None) -> int:
     """Redistribute orphan fragments from dissolved topics."""
     dissolved = db.conn.execute(
         "SELECT topic_id FROM dynamic_topics WHERE quality='dissolved'"
@@ -261,9 +261,9 @@ def _process_dissolved_topics(db: QADatabase, debug_cb=None) -> int:
                 db.topic.set_fragment_membership(fid, topic_id, loyalty=0.0)
             redistributed += 1
 
-    if debug_cb and redistributed:
+    if debug and redistributed:
         from ..error_utils import log_info
-        log_info(debug_cb, "Dissolved", f"{len(dissolved)} topics, {redistributed} fragments redistributed")
+        log_info(debug, "Dissolved", f"{len(dissolved)} topics, {redistributed} fragments redistributed")
     return redistributed
 
 
@@ -298,7 +298,7 @@ def _compute_graph_centroid(vectors: list[np.ndarray], weights: list[float],
     return centroid
 
 
-def _adjust_vectors_from_feedback(db: QADatabase, debug_cb=None) -> dict:
+def _adjust_vectors_from_feedback(db: QADatabase, debug=None) -> dict:
     """Three-layer cascade: adjust Fragment→KP→Topic vectors from LLM feedback."""
     result = {"fragments_adjusted": 0, "kps_adjusted": 0, "topics_adjusted": 0}
 
@@ -404,8 +404,8 @@ def _adjust_vectors_from_feedback(db: QADatabase, debug_cb=None) -> dict:
             db.vector.upsert_topic_vector(topic_id, centroid, len(kp_ids))
             result["topics_adjusted"] += 1
 
-    if debug_cb and sum(result.values()) > 0:
+    if debug and sum(result.values()) > 0:
         from ..error_utils import log_info
-        log_info(debug_cb, "Vector cascade", f"{result['fragments_adjusted']} fragments, "
+        log_info(debug, "Vector cascade", f"{result['fragments_adjusted']} fragments, "
                  f"{result['kps_adjusted']} KPs, {result['topics_adjusted']} topics")
     return result

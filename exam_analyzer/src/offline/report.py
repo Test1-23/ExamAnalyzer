@@ -61,7 +61,7 @@ def _write_verb_report(db: QADatabase, output_dir: str, subject_code: str):
 
 
 def run_offline_analysis(db, api_url: str, api_key: str,
-                         progress_callback=None, debug_callback=None,
+                         progress_callback=None, debug=None,
                          output_dir: str = None):
     """Run all three offline analysis tasks in order.
 
@@ -69,8 +69,8 @@ def run_offline_analysis(db, api_url: str, api_key: str,
     output_dir: directory for analysis report files (defaults to point/ adjacent to db_path)
     """
     def _debug(msg):
-        if debug_callback:
-            debug_callback(f"[Offline] {msg}")
+        if debug:
+            debug(f"[Offline] {msg}")
         else:
             print(f"[Offline] {msg}")
 

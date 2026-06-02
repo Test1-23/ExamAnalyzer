@@ -162,7 +162,7 @@ def _cosine_to_centroid(qa_vectors, qa_idx, centroid):
     return float(np.dot(qa_vectors[qa_idx], centroid))
 
 
-def cluster_qas(db: QADatabase, debug_cb=None) -> dict:
+def cluster_qas(db: QADatabase, debug=None) -> dict:
     """Group all QAs into clusters using cosine similarity graph.
 
     Returns: {
@@ -172,8 +172,8 @@ def cluster_qas(db: QADatabase, debug_cb=None) -> dict:
         "cohesions": [float, ...],           # cohesion per cluster
     }
     """
-    if debug_cb:
-        debug_cb("Clustering QAs into knowledge points...")
+    if debug:
+        debug("Clustering QAs into knowledge points...")
 
     qas = db.get_all()
     if len(qas) < 2:
@@ -187,12 +187,12 @@ def cluster_qas(db: QADatabase, debug_cb=None) -> dict:
         else qa.get("knowledge_summary", "")
         for qa in qas
     ]
-    if debug_cb:
-        debug_cb("Loading KG embedding model (may take 20-60s on first run)...")
+    if debug:
+        debug("Loading KG embedding model (may take 20-60s on first run)...")
     model = _get_model(TOPIC_EMBED_MODEL)
     qa_vectors = model.encode(texts, normalize_embeddings=True, convert_to_numpy=True)
-    if debug_cb:
-        debug_cb("KG embedding complete")
+    if debug:
+        debug("KG embedding complete")
 
     # Build similarity graph and find clusters
     adj, cos_matrix = _build_similarity_graph(qa_vectors, threshold=0.70)
@@ -206,7 +206,7 @@ def cluster_qas(db: QADatabase, debug_cb=None) -> dict:
         centroids.append(centroid)
         cohesions.append(_compute_cohesion(qa_vectors, cluster, centroid))
 
-    if debug_cb:
+    if debug:
         sizes = sorted([len(c) for c in clusters], reverse=True) if clusters else []
         size_str = f"sizes={sizes[:10]}" + ("..." if len(sizes) > 10 else "") if sizes else "none"
         coh_vals = [c for c in cohesions if c is not None]
@@ -215,9 +215,9 @@ def cluster_qas(db: QADatabase, debug_cb=None) -> dict:
             coh_str = f", cohesion: min={min(coh_vals):.2f}, max={max(coh_vals):.2f}, avg={sum(coh_vals)/len(coh_vals):.2f}"
         noise_pct = len(noise) / (len(clusters) + len(noise)) * 100 if (len(clusters) + len(noise)) > 0 else 0
         from .error_utils import log_info
-        log_info(debug_cb, "KG Clusters", f"{len(clusters)} ({size_str}{coh_str})")
+        log_info(debug, "KG Clusters", f"{len(clusters)} ({size_str}{coh_str})")
         from .error_utils import log_info
-        log_info(debug_cb, "KG Noise", f"{len(noise)} QAs ({noise_pct:.0f}% of total)")
+        log_info(debug, "KG Noise", f"{len(noise)} QAs ({noise_pct:.0f}% of total)")
 
     return {
         "clusters": clusters,
@@ -229,7 +229,7 @@ def cluster_qas(db: QADatabase, debug_cb=None) -> dict:
     }
 
 
-def generate_kps(db: QADatabase, clustering: dict, client, debug_cb=None) -> list[str]:
+def generate_kps(db: QADatabase, clustering: dict, client, debug=None) -> list[str]:
     """Generate KP nodes from clusters. Flash names each cluster.
 
     Returns list of kp_ids.
@@ -240,8 +240,8 @@ def generate_kps(db: QADatabase, clustering: dict, client, debug_cb=None) -> lis
     cohesions = clustering["cohesions"]
 
     if not clusters:
-        if debug_cb:
-            debug_cb("  No clusters to generate KPs from")
+        if debug:
+            debug("  No clusters to generate KPs from")
         return []
 
     kp_ids = []
@@ -292,11 +292,11 @@ def generate_kps(db: QADatabase, clustering: dict, client, debug_cb=None) -> lis
 
         messages = [{"role": "system", "content": sys}, {"role": "user", "content": usr}]
         try:
-            result, _ = call_flash(client, messages, max_retries=1, debug_callback=debug_cb)
+            result, _ = call_flash(client, messages, max_retries=1, debug=debug)
             groups = result.get("groups", []) if isinstance(result, dict) else []
         except Exception as e:
             from .error_utils import log_exception
-            log_exception(debug_cb, "KP naming", "batch", e)
+            log_exception(debug, "KP naming", "batch", e)
             groups = []
 
         # Fallback: auto-name clusters that Flash failed to name
@@ -348,9 +348,9 @@ def generate_kps(db: QADatabase, clustering: dict, client, debug_cb=None) -> lis
                     )
 
                 batch_results.append(kp_id)
-                if debug_cb:
+                if debug:
                     from .error_utils import log_info
-                    log_info(debug_cb, "KP named", f"{kp_id}: '{name}' ({len(cluster)} QAs, cohesion={cohesions[cluster_idx]:.2f})")
+                    log_info(debug, "KP named", f"{kp_id}: '{name}' ({len(cluster)} QAs, cohesion={cohesions[cluster_idx]:.2f})")
         return batch_results
 
     from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -362,15 +362,15 @@ def generate_kps(db: QADatabase, clustering: dict, client, debug_cb=None) -> lis
                 kp_ids.extend(future.result())
             except Exception as e:
                 from .error_utils import log_exception
-                log_exception(debug_cb, "KP naming", "batch_thread", e)
+                log_exception(debug, "KP naming", "batch_thread", e)
 
-    if debug_cb:
+    if debug:
         total_clusters = len(clusters)
         from .error_utils import log_info
-        log_info(debug_cb, "KG KPs generated", f"{len(kp_ids)} (cluster coverage: {len(kp_ids)}/{total_clusters})")
+        log_info(debug, "KG KPs generated", f"{len(kp_ids)} (cluster coverage: {len(kp_ids)}/{total_clusters})")
         batch_count = (len(clusters) + batch_size - 1) // batch_size if clusters else 0
         from .error_utils import log_info
-        log_info(debug_cb, "KG Flash naming", f"{batch_count} batches")
+        log_info(debug, "KG Flash naming", f"{batch_count} batches")
 
     return kp_ids
 
@@ -433,7 +433,7 @@ def _compute_semantic_edges(kp_centroids: dict) -> list[tuple]:
 
 
 def discover_kp_edges(db: QADatabase, clustering: dict, kp_ids: list[str],
-                      debug_cb=None) -> int:
+                      debug=None) -> int:
     """Discover edges between KPs: retrieval (Phase 2 behavior) + semantic (embedding).
 
     Returns number of edges created.
@@ -441,8 +441,8 @@ def discover_kp_edges(db: QADatabase, clustering: dict, kp_ids: list[str],
     if len(kp_ids) < 2:
         return 0
 
-    if debug_cb:
-        debug_cb("Discovering KP edges...")
+    if debug:
+        debug("Discovering KP edges...")
 
     qa_list = clustering["qa_list"]
     centroids_list = clustering["centroids"]
@@ -483,15 +483,15 @@ def discover_kp_edges(db: QADatabase, clustering: dict, kp_ids: list[str],
             ))
             edge_count += 1
 
-    if debug_cb:
+    if debug:
         from .error_utils import log_info
-        log_info(debug_cb, "KP edges", f"{edge_count} discovered")
+        log_info(debug, "KP edges", f"{edge_count} discovered")
 
     return edge_count
 
 
 def discover_sequential_edges(db: QADatabase, clustering: dict, kp_ids: list[str],
-                             debug_cb=None) -> int:
+                             debug=None) -> int:
     """Discover edges from exam question ordering (sequential edges).
     If KP A consistently appears before KP B across multiple papers, create a sequential edge."""
     if len(kp_ids) < 2:
@@ -517,15 +517,15 @@ def discover_sequential_edges(db: QADatabase, clustering: dict, kp_ids: list[str
             ))
             edge_count += 1
 
-    if debug_cb:
+    if debug:
         from .error_utils import log_info
-        log_info(debug_cb, "Sequential edges", f"{edge_count} (from {len(transitions)} transitions)")
+        log_info(debug, "Sequential edges", f"{edge_count} (from {len(transitions)} transitions)")
 
     return edge_count
 
 
 def discover_learning_path_edges(db: QADatabase, kp_ids: list[str],
-                                 debug_cb=None) -> int:
+                                 debug=None) -> int:
     """Discover edges from student learning paths (learning_path edges).
     If >= 3 students ask about KP A then KP B in the same session, create an edge."""
     if len(kp_ids) < 2:
@@ -566,14 +566,14 @@ def discover_learning_path_edges(db: QADatabase, kp_ids: list[str],
             ))
             edge_count += 1
 
-    if debug_cb:
+    if debug:
         from .error_utils import log_info
-        log_info(debug_cb, "Learning path edges", f"{edge_count} (from {len(transitions)} transitions)")
+        log_info(debug, "Learning path edges", f"{edge_count} (from {len(transitions)} transitions)")
 
     return edge_count
 
 
-def fuse_all_edges(db: QADatabase, kp_ids: list[str], debug_cb=None):
+def fuse_all_edges(db: QADatabase, kp_ids: list[str], debug=None):
     """Merge multi-signal edges: if an edge has supporting evidence from multiple sources,
     upgrade its confidence and compute combined strength."""
     edges = db.kp.get_edges()
@@ -625,21 +625,21 @@ def fuse_all_edges(db: QADatabase, kp_ids: list[str], debug_cb=None):
             confidence=confidence,
         ))
 
-    if debug_cb:
+    if debug:
         from .error_utils import log_info
-        log_info(debug_cb, "Edge fusion", f"{len(grouped)} unique pairs from {len(edges)} edges")
+        log_info(debug, "Edge fusion", f"{len(grouped)} unique pairs from {len(edges)} edges")
 
 
 def run_knowledge_graph(db, api_url: str, api_key: str,
-                        debug_callback=None):
+                        debug=None):
     """Main entry point: cluster QAs, generate KPs, discover edges.
     Called from pipeline after QA processing and topic merge complete.
 
     This replaces (or augments) the distillation step.
     """
     def _debug(msg):
-        if debug_callback:
-            debug_callback(f"[KG] {msg}")
+        if debug:
+            debug(f"[KG] {msg}")
         else:
             print(f"[KG] {msg}")
 

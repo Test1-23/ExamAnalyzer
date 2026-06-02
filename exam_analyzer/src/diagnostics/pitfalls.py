@@ -28,7 +28,7 @@ Two subsystems that run after pipeline completion:
 _log = get_logger()
 
 
-def auto_discover_pitfalls(db: QADatabase, kp_id: str, debug_cb=None) -> list[dict]:
+def auto_discover_pitfalls(db: QADatabase, kp_id: str, debug=None) -> list[dict]:
     """Discover pitfalls from Phase 2 missed_points data for a KP."""
     qa_rows = db.conn.execute(
         "SELECT qa_id FROM qa_kp_membership WHERE kp_id = ?", (kp_id,)
@@ -55,7 +55,7 @@ def auto_discover_pitfalls(db: QADatabase, kp_id: str, debug_cb=None) -> list[di
         vecs = model.encode(missed_lines, normalize_embeddings=True, convert_to_numpy=True)
     except Exception as e:
         from ..error_utils import log_exception
-        log_exception(debug_cb, "Pitfall embedding", f"kp={kp_id}", e)
+        log_exception(debug, "Pitfall embedding", f"kp={kp_id}", e)
         return []
     groups = cluster_by_cosine(vecs, 0.80, min_group_size=3)
     patterns = [{"pattern": missed_lines[g[0]], "count": len(g)} for g in groups]
@@ -76,15 +76,15 @@ def auto_discover_pitfalls(db: QADatabase, kp_id: str, debug_cb=None) -> list[di
                 cohesion=kp.get("cohesion"), evidence_count=kp.get("evidence_count", 0),
                 quality=kp.get("quality", "draft"),
             ))
-    if debug_cb and patterns:
+    if debug and patterns:
         top = patterns[0]
         from ..error_utils import log_info
-        log_info(debug_cb, "KP pitfalls", f"{kp_id}: {len(patterns)} pitfalls "
+        log_info(debug, "KP pitfalls", f"{kp_id}: {len(patterns)} pitfalls "
                  f"(top: \"{top['pattern'][:80]}\" x{top['count']})")
     return patterns
 
 
-def compute_exam_trends(db: QADatabase, debug_cb=None) -> int:
+def compute_exam_trends(db: QADatabase, debug=None) -> int:
     """Compute exam trends for all KPs with >= 2 years of data."""
     kps = db.kp.get_all()
     if not kps:
@@ -121,18 +121,18 @@ def compute_exam_trends(db: QADatabase, debug_cb=None) -> int:
             )
             years_seen.add(r["year"])
             trend_count += 1
-        if len(years_seen) >= 3 and debug_cb:
+        if len(years_seen) >= 3 and debug:
             from ..error_utils import log_info
-            log_info(debug_cb, "Trend", f"{kp_id}: {len(years_seen)} years, "
+            log_info(debug, "Trend", f"{kp_id}: {len(years_seen)} years, "
                      f"{sum(r['cnt'] for r in rows)} total occurrences")
-    if debug_cb:
+    if debug:
         multi_year = sum(1 for kp in kps if len(set(
             r["year"] for r in db.conn.execute(
                 "SELECT year FROM exam_trends WHERE kp_id = ?", (kp["id"],)
             ).fetchall()
         )) >= 3)
         from ..error_utils import log_info
-        log_info(debug_cb, "Trends", f"{trend_count} year-rows across {len(kps)} KPs "
+        log_info(debug, "Trends", f"{trend_count} year-rows across {len(kps)} KPs "
                  f"({multi_year} KPs with >= 3 years data)")
     return trend_count
 

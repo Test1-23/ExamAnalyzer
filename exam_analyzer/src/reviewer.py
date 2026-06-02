@@ -38,7 +38,7 @@ def review_distilled(content: str, client, topic_links: dict, topic_related: dic
     try:
         result, _ = call_flash(client, [{"role": "system", "content": sys_a},
                                       {"role": "user", "content": usr_a}],
-                           max_retries=1, debug_callback=debug)
+                           max_retries=1, debug=debug)
         if isinstance(result, dict) and result.get("content"):
             reviewed = result["content"]
     except Exception as e:
@@ -66,7 +66,7 @@ def review_distilled(content: str, client, topic_links: dict, topic_related: dic
     try:
         result, _ = call_flash(client, [{"role": "system", "content": sys_b},
                                       {"role": "user", "content": usr_b}],
-                           max_retries=1, debug_callback=debug)
+                           max_retries=1, debug=debug)
         if isinstance(result, dict) and result.get("content"):
             reviewed = result["content"]
     except Exception as e:

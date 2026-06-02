@@ -160,7 +160,7 @@ def _flash_review_merges(ambiguous: list, db: QADatabase, client, debug) -> dict
             {"role": "user", "content": usr_tpl % (_escape_pct(t1), _escape_pct(a1[:500]), _escape_pct(t2), _escape_pct(a2[:500]), cos)},
         ]
         try:
-            result, _ = call_flash(client, messages, max_retries=1, debug_callback=debug)
+            result, _ = call_flash(client, messages, max_retries=1, debug=debug)
             if isinstance(result, dict) and result.get("merge"):
                 canonical = result.get("canonical", "")
                 if not canonical:

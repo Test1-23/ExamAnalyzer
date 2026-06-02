@@ -14,10 +14,10 @@ Usage::
     try:
         ...
     except Exception as e:
-        log_exception(debug_cb, "Verb extraction", f"batch={b}", e)
+        log_exception(debug, "Verb extraction", f"batch={b}", e)
         continue  # fallback behavior unchanged
 
-The function accepts both callable loggers (e.g. ``debug_cb``, ``print``)
+The function accepts both callable loggers (e.g. ``debug``, ``print``)
 and logger objects with ``.debug()`` / ``.warning()`` methods.
 """
 

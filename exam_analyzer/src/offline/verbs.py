@@ -17,13 +17,13 @@ _log = get_logger()
 # Task 2: Command Verb Analysis
 # ============================================================
 
-def analyze_command_verbs(db: QADatabase, client, debug_cb, progress_cb=None) -> dict:
+def analyze_command_verbs(db: QADatabase, client, debug, progress_cb=None) -> dict:
     """Extract command verbs from QA question_text, then analyze answer patterns per verb.
 
     Returns: {verb: {sample_count, avg_answer_length, pattern_summary, ...}, ...}
     """
     _log.info("Offline Task 2: Command verb analysis starting")
-    debug_cb("Task 2: Extracting command verbs...")
+    debug("Task 2: Extracting command verbs...")
 
     qas = db.get_all()
     if not qas:
@@ -41,19 +41,19 @@ def analyze_command_verbs(db: QADatabase, client, debug_cb, progress_cb=None) ->
     if not new_qas:
         _log.info("Task 2: All QAs already have verb annotations, skipping extraction")
     else:
-        _phase1_extract_verbs(new_qas, db, client, debug_cb, progress_cb)
+        _phase1_extract_verbs(new_qas, db, client, debug, progress_cb)
 
     # Phase 2: Aggregate statistics per verb
-    debug_cb("Task 2: Aggregating answer patterns...")
+    debug("Task 2: Aggregating answer patterns...")
     qas = db.get_all()  # reload with updated command_verb
     verb_groups = _group_qas_by_verb(qas)
     verb_stats = _compute_verb_stats(verb_groups, db)
 
     # Phase 3: Flash pattern summary per verb
-    debug_cb("Task 2: Summarizing verb patterns...")
+    debug("Task 2: Summarizing verb patterns...")
     if progress_cb:
         progress_cb(0, "Analyzing command verb patterns...")
-    _phase3_summarize_patterns(verb_groups, verb_stats, db, client, debug_cb)
+    _phase3_summarize_patterns(verb_groups, verb_stats, db, client, debug)
 
     # Phase 4: Assign verb families
     _phase4_assign_families(db)
@@ -64,10 +64,10 @@ def analyze_command_verbs(db: QADatabase, client, debug_cb, progress_cb=None) ->
     annotated = len([q for q in db.get_all() if q.get("command_verb", "")])
     unknown = len([q for q in db.get_all() if q.get("command_verb", "") == "unknown"])
     from ..error_utils import log_info
-    log_info(debug_cb, "Verbs coverage", f"{annotated}/{total} QAs annotated ({annotated/total*100:.0f}%)" if total else "")
+    log_info(debug, "Verbs coverage", f"{annotated}/{total} QAs annotated ({annotated/total*100:.0f}%)" if total else "")
     if unknown:
         from ..error_utils import log_info
-        log_info(debug_cb, "Verbs unknown", f"{unknown} QAs - Flash couldn't determine verb")
+        log_info(debug, "Verbs unknown", f"{unknown} QAs - Flash couldn't determine verb")
     # Top 10 verbs
     verb_counts = db.conn.execute(
         "SELECT command_verb, COUNT(*) as cnt FROM qa_pairs "
@@ -77,13 +77,13 @@ def analyze_command_verbs(db: QADatabase, client, debug_cb, progress_cb=None) ->
     if verb_counts:
         vstr = ", ".join(f"{r['command_verb']}={r['cnt']}" for r in verb_counts)
         from ..error_utils import log_info
-        log_info(debug_cb, "Verbs distribution", f"{vstr}")
+        log_info(debug, "Verbs distribution", f"{vstr}")
 
     _log.info(f"Task 2: Complete. {len(verb_stats)} verbs analyzed")
     return verb_stats
 
 
-def _phase1_extract_verbs(qas, db, client, debug_cb, progress_cb):
+def _phase1_extract_verbs(qas, db, client, debug, progress_cb):
     """Batch Flash extraction of command verbs from question_text. Parallelized."""
     batch_size = 20
     batches = [qas[i:i+batch_size] for i in range(0, len(qas), batch_size)]
@@ -114,11 +114,11 @@ def _phase1_extract_verbs(qas, db, client, debug_cb, progress_cb):
         messages = [{"role": "system", "content": sys}, {"role": "user", "content": usr}]
         flash_ok = True
         try:
-            result, _ = call_flash(client, messages, max_retries=1, debug_callback=debug_cb)
+            result, _ = call_flash(client, messages, max_retries=1, debug=debug)
             verb_list = result.get("verbs", []) if isinstance(result, dict) else []
         except Exception as e:
             from ..error_utils import log_exception
-            log_exception(debug_cb, "Verb extraction", f"batch={b}", e)
+            log_exception(debug, "Verb extraction", f"batch={b}", e)
             verb_list = []
             flash_ok = False
 
@@ -151,7 +151,7 @@ def _phase1_extract_verbs(qas, db, client, debug_cb, progress_cb):
                     future.result()
                 except Exception as e:
                     from ..error_utils import log_exception
-                    log_exception(debug_cb, "Verb extraction", f"thread", e)
+                    log_exception(debug, "Verb extraction", f"thread", e)
 
     if progress_cb:
         progress_cb(100, "Verb extraction complete")
@@ -241,7 +241,7 @@ def _compute_verb_stats(verb_groups, db):
     return stats
 
 
-def _phase3_summarize_patterns(verb_groups, verb_stats, db, client, debug_cb):
+def _phase3_summarize_patterns(verb_groups, verb_stats, db, client, debug):
     """Flash summarizes answer patterns for each verb with >= 3 samples. Parallelized."""
     verbs_to_process = [(v, qas) for v, qas in verb_groups.items()
                         if verb_stats.get(v, {}).get("sample_count", 0) >= 3]
@@ -263,11 +263,11 @@ def _phase3_summarize_patterns(verb_groups, verb_stats, db, client, debug_cb):
             qa_texts=qa_texts,
         )
         try:
-            result, _ = call_flash(client, messages, max_retries=1, debug_callback=debug_cb)
+            result, _ = call_flash(client, messages, max_retries=1, debug=debug)
             summary = result.get("pattern_summary", "") if isinstance(result, dict) else ""
         except Exception as e:
             from ..error_utils import log_exception
-            log_exception(debug_cb, "Pattern summary", f"verb={verb}", e)
+            log_exception(debug, "Pattern summary", f"verb={verb}", e)
             return None
 
         # Topic-level variance
@@ -300,7 +300,7 @@ def _phase3_summarize_patterns(verb_groups, verb_stats, db, client, debug_cb):
             topic_specific_patterns=json.dumps(topic_specific) if topic_specific else "",
         ))
         from ..error_utils import log_info
-        log_info(debug_cb, "Verb pattern", f"'{verb}': {stat['sample_count']} samples, pattern generated")
+        log_info(debug, "Verb pattern", f"'{verb}': {stat['sample_count']} samples, pattern generated")
         return verb
 
     from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -312,7 +312,7 @@ def _phase3_summarize_patterns(verb_groups, verb_stats, db, client, debug_cb):
                 future.result()
             except Exception as e:
                 from ..error_utils import log_exception
-                log_exception(debug_cb, "Verb pattern", f"thread", e)
+                log_exception(debug, "Verb pattern", f"thread", e)
 
 
 def _phase4_assign_families(db):

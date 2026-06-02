@@ -17,13 +17,13 @@ _log = get_logger()
 # Task 1: Dependency Discovery
 # ============================================================
 
-def discover_dependencies(db: QADatabase, client, debug_cb, progress_cb=None) -> list:
+def discover_dependencies(db: QADatabase, client, debug, progress_cb=None) -> list:
     """Discover prerequisite relationships between topics.
 
     Returns: [(prerequisite, dependent, score, confidence), ...]
     """
     _log.info("Offline Task 1: Dependency discovery starting")
-    debug_cb("Task 1: Discovering topic dependencies...")
+    debug("Task 1: Discovering topic dependencies...")
 
     qas = db.get_all()
     if not qas:
@@ -40,19 +40,19 @@ def discover_dependencies(db: QADatabase, client, debug_cb, progress_cb=None) ->
         progress_cb(0, "Generating dependency candidates...")
 
     # Phase 0: Candidate generation
-    candidates = _phase0_generate_candidates(db, debug_cb)
+    candidates = _phase0_generate_candidates(db, debug)
 
     if progress_cb:
         progress_cb(40, f"Validating {len(candidates)} candidate pairs...")
 
     # Phase 1: Batch Flash validation
-    validated = _phase1_validate_candidates(db, candidates, client, debug_cb)
+    validated = _phase1_validate_candidates(db, candidates, client, debug)
 
     if progress_cb:
         progress_cb(70, "Post-processing dependency graph...")
 
     # Phase 2: Graph post-processing
-    _phase2_postprocess_dependencies(db, validated, debug_cb)
+    _phase2_postprocess_dependencies(db, validated, debug)
 
     db.analysis.checkpoint("dependencies", current_count, "completed")
 
@@ -72,13 +72,13 @@ def discover_dependencies(db: QADatabase, client, debug_cb, progress_cb=None) ->
             nodes.add(r["prerequisite"]); nodes.add(r["dependent"])
         edge_count = sum(conf_map.values())
         from ..error_utils import log_info
-        log_info(debug_cb, "Dependencies", f"{cstr} - {len(nodes)} nodes, {edge_count} edges")
+        log_info(debug, "Dependencies", f"{cstr} - {len(nodes)} nodes, {edge_count} edges")
 
     _log.info(f"Task 1: Complete. {len(validated)} dependencies stored")
     return validated
 
 
-def _phase0_generate_candidates(db, debug_cb):
+def _phase0_generate_candidates(db, debug):
     """Generate candidate dependency pairs from topic_links and embedding similarity."""
     topic_links = db.topic.get_links()
     topic_texts = db.qa.get_topic_answer_texts()
@@ -115,7 +115,7 @@ def _phase0_generate_candidates(db, debug_cb):
             cos_matrix = vecs @ vecs.T
         except Exception as e:
             from ..error_utils import log_exception
-            log_exception(debug_cb, "Topic embedding", "", e)
+            log_exception(debug, "Topic embedding", "", e)
             cos_matrix = None
 
         if cos_matrix is not None:
@@ -136,12 +136,12 @@ def _phase0_generate_candidates(db, debug_cb):
                         candidates.add((b, a, "embed_only", round(cos, 3)))
 
     from ..error_utils import log_info
-    log_info(debug_cb, "Dependency candidates", f"{len(candidates)} pairs "
+    log_info(debug, "Dependency candidates", f"{len(candidates)} pairs "
              f"(topic_links={len(topic_links)}, topics={len(topics)})")
     return list(candidates)
 
 
-def _phase1_validate_candidates(db, candidates, client, debug_cb):
+def _phase1_validate_candidates(db, candidates, client, debug):
     """Batch Flash validation of dependency candidates (5 pairs per call). Parallelized."""
     topic_texts = db.qa.get_topic_answer_texts()
     batch_size = 5
@@ -169,11 +169,11 @@ def _phase1_validate_candidates(db, candidates, client, debug_cb):
 
         messages = DEPENDENCY_VALIDATE.build(lang=lang, pairs_block=pairs_block)
         try:
-            result, _ = call_flash(client, messages, max_retries=1, debug_callback=debug_cb)
+            result, _ = call_flash(client, messages, max_retries=1, debug=debug)
             pairs = result.get("pairs", []) if isinstance(result, dict) else []
         except Exception as e:
             from ..error_utils import log_exception
-            log_exception(debug_cb, "Dependency validation", f"batch={b}", e)
+            log_exception(debug, "Dependency validation", f"batch={b}", e)
             return []
 
         batch_results = []
@@ -208,14 +208,14 @@ def _phase1_validate_candidates(db, candidates, client, debug_cb):
                     validated.extend(future.result())
                 except Exception as e:
                     from ..error_utils import log_exception
-                    log_exception(debug_cb, "Dependency validation", f"thread", e)
+                    log_exception(debug, "Dependency validation", f"thread", e)
 
     from ..error_utils import log_info
-    log_info(debug_cb, "Flash validated", f"{len(validated)} dependencies (from {len(candidates)} candidates, {len(batches)} batches parallel)")
+    log_info(debug, "Flash validated", f"{len(validated)} dependencies (from {len(candidates)} candidates, {len(batches)} batches parallel)")
     return validated
 
 
-def _phase2_postprocess_dependencies(db, validated, debug_cb):
+def _phase2_postprocess_dependencies(db, validated, debug):
     """Store dependencies, apply transitive reduction, detect cycles."""
     # Build adjacency for graph operations
     edges = {}  # (pre, dep) -> metadata
@@ -266,7 +266,7 @@ def _phase2_postprocess_dependencies(db, validated, debug_cb):
     for (pre, dep), v in edges.items():
         if (pre, dep) in redundant:
             from ..error_utils import log_info
-            log_info(debug_cb, "Transitive reduction", f"removed {pre}->{dep}")
+            log_info(debug, "Transitive reduction", f"removed {pre}->{dep}")
             continue
         db.analysis.insert_dependency(DependencySpec(
             prerequisite=pre, dependent=dep,
@@ -281,7 +281,7 @@ def _phase2_postprocess_dependencies(db, validated, debug_cb):
         stored += 1
 
     from ..error_utils import log_info
-    log_info(debug_cb, "Dependencies stored", f"{stored} (removed {len(redundant)} transitive)")
+    log_info(debug, "Dependencies stored", f"{stored} (removed {len(redundant)} transitive)")
 
     # Detect remaining cycles (co-requisites) — check both new candidates and pre-existing DB edges
     cycles_found = 0
@@ -305,7 +305,7 @@ def _phase2_postprocess_dependencies(db, validated, debug_cb):
                 )
                 cycles_found += 1
         from ..error_utils import log_info
-        log_info(debug_cb, "Co-requisite cycles", f"{cycles_found} found")
+        log_info(debug, "Co-requisite cycles", f"{cycles_found} found")
 
 
 # ============================================================

@@ -271,11 +271,11 @@ def apply_student_feedback(db: QADatabase):
 # Unified entry points
 # ═══════════════════════════════════════════════════════════════
 
-def run_closed_loop(db, api_url: str, api_key: str, debug_callback=None):
+def run_closed_loop(db, api_url: str, api_key: str, debug=None):
     """Auto-discover pitfalls and compute exam trends."""
     def _debug(msg):
-        if debug_callback:
-            debug_callback(f"[DX] {msg}")
+        if debug:
+            debug(f"[DX] {msg}")
         else:
             print(f"[DX] {msg}")
     _debug("Starting closed-loop improvements...")
@@ -290,11 +290,11 @@ def run_closed_loop(db, api_url: str, api_key: str, debug_callback=None):
     _debug("Closed-loop improvements complete")
 
 
-def run_cross_paper_check(db, display_name: str = None, debug_callback=None):
+def run_cross_paper_check(db, display_name: str = None, debug=None):
     """Compute signature, update baselines, detect anomalies."""
     def _debug(msg):
-        if debug_callback:
-            debug_callback(f"[DX] {msg}")
+        if debug:
+            debug(f"[DX] {msg}")
         else:
             print(f"[DX] {msg}")
     if db.count() < 10:

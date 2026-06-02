@@ -35,11 +35,11 @@ def make_topic_id(topic: str) -> str:
 # Diagnostic
 # ============================================================
 
-def log_schema_status(db, debug_cb=None):
+def log_schema_status(db, debug=None):
     """Diagnostic: log DB schema state for test verification."""
     def _d(msg):
-        if debug_cb:
-            debug_cb(f"[DB] {msg}")
+        if debug:
+            debug(f"[DB] {msg}")
     try:
         tables = [r["name"] for r in db.conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"

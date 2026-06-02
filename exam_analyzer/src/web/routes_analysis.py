@@ -81,7 +81,7 @@ def start_analysis():
                 input_dir=state.INPUT_DIR, output_path=state.POINTS_FILE,
                 intermediate_dir=os.path.join(state.THIS_DIR, "intermediate"),
                 progress_callback=progress_callback,
-                debug_callback=state.debug, log_callback=state.log_step,
+                debug=state.debug, log_callback=state.log_step,
                 shutdown_event=state.shutdown_event,
             )
             if result.healthy:

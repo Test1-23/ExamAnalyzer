@@ -85,15 +85,15 @@ def _get_migration_threshold(total_help_entries: int) -> float:
         return base * 0.7
 
 
-def _run_migration_cycle(db: QADatabase, debug_cb=None) -> int:
+def _run_migration_cycle(db: QADatabase, debug=None) -> int:
     """Check all fragments for migration opportunities. Returns migration count."""
     total_help = db.conn.execute(
         "SELECT COUNT(*) as cnt FROM fragment_help_map"
     ).fetchone()["cnt"]
     if total_help < 20:
-        if debug_cb:
+        if debug:
             from ..error_utils import log_info
-            log_info(debug_cb, "Migration", f"too few help entries ({total_help}), skipping")
+            log_info(debug, "Migration", f"too few help entries ({total_help}), skipping")
         return 0
 
     threshold = _get_migration_threshold(total_help)
@@ -150,17 +150,17 @@ def _run_migration_cycle(db: QADatabase, debug_cb=None) -> int:
             for fid in fids:
                 db.topic.set_fragment_membership(fid, dst_topic, loyalty=0.5)
                 migrated += 1
-            if debug_cb:
+            if debug:
                 from ..error_utils import log_info
-                log_info(debug_cb, "Migration", f"{len(fids)} fragments {src_topic} -> {dst_topic}")
-        elif debug_cb:
+                log_info(debug, "Migration", f"{len(fids)} fragments {src_topic} -> {dst_topic}")
+        elif debug:
             from ..error_utils import log_info
-            log_info(debug_cb, "Migration deferred", f"{len(fids)} fragments {src_topic} -> "
+            log_info(debug, "Migration deferred", f"{len(fids)} fragments {src_topic} -> "
                      f"{dst_topic} (need {batch_threshold}, have {len(fids)})")
     return migrated
 
 
-def _update_topic_stats(db: QADatabase, debug_cb=None) -> int:
+def _update_topic_stats(db: QADatabase, debug=None) -> int:
     """Update mass, cohesion, stability for all topics."""
     all_topics = [r["topic_id"] for r in db.conn.execute(
         "SELECT topic_id FROM dynamic_topics"
@@ -223,7 +223,7 @@ def _update_topic_stats(db: QADatabase, debug_cb=None) -> int:
                 )
         updated += 1
 
-    if debug_cb:
+    if debug:
         forming = db.conn.execute(
             "SELECT COUNT(*) as cnt FROM dynamic_topics WHERE quality='forming'"
         ).fetchone()["cnt"]
@@ -231,14 +231,14 @@ def _update_topic_stats(db: QADatabase, debug_cb=None) -> int:
             "SELECT COUNT(*) as cnt FROM dynamic_topics WHERE quality='stable'"
         ).fetchone()["cnt"]
         from ..error_utils import log_info
-        log_info(debug_cb, "Topic stats", f"{updated} topics, {forming} forming, {stable} stable")
+        log_info(debug, "Topic stats", f"{updated} topics, {forming} forming, {stable} stable")
     return updated
 
 
-def run_phase2_cycle(db, debug_cb=None) -> dict:
+def run_phase2_cycle(db, debug=None) -> dict:
     """Run Phase 2 self-organization: migration + topic stats + evolution."""
-    migrated = _run_migration_cycle(db, debug_cb)
-    updated = _update_topic_stats(db, debug_cb)
+    migrated = _run_migration_cycle(db, debug)
+    updated = _update_topic_stats(db, debug)
 
     # Phase 3: Topic evolution — only when help data has grown
     total_help = db.conn.execute(
@@ -254,20 +254,20 @@ def run_phase2_cycle(db, debug_cb=None) -> dict:
     splits = merges = dissolved = 0
     if total_help > prev_help + 20:  # at least 20 new help entries
         try:
-            splits = _detect_topic_splits(db, debug_cb)
+            splits = _detect_topic_splits(db, debug)
         except Exception as e:
             from ..error_utils import log_exception
-            log_exception(debug_cb, "Phase2 evolution", "split_detection", e)
+            log_exception(debug, "Phase2 evolution", "split_detection", e)
         try:
-            merges = _detect_topic_merges(db, debug_cb)
+            merges = _detect_topic_merges(db, debug)
         except Exception as e:
             from ..error_utils import log_exception
-            log_exception(debug_cb, "Phase2 evolution", "merge_detection", e)
+            log_exception(debug, "Phase2 evolution", "merge_detection", e)
         try:
-            dissolved = _process_dissolved_topics(db, debug_cb)
+            dissolved = _process_dissolved_topics(db, debug)
         except Exception as e:
             from ..error_utils import log_exception
-            log_exception(debug_cb, "Phase2 evolution", "dissolve", e)
+            log_exception(debug, "Phase2 evolution", "dissolve", e)
         # Record checkpoint
         with db.transaction():
             db.conn.execute(
@@ -279,11 +279,11 @@ def run_phase2_cycle(db, debug_cb=None) -> dict:
     # Phase 5: Vector cascade adjustment
     vectors_adjusted = 0
     try:
-        v_result = _adjust_vectors_from_feedback(db, debug_cb)
+        v_result = _adjust_vectors_from_feedback(db, debug)
         vectors_adjusted = sum(v_result.values())
     except Exception as e:
         from ..error_utils import log_exception
-        log_exception(debug_cb, "Vector adjustment", "", e)
+        log_exception(debug, "Vector adjustment", "", e)
 
     return {"migrated": migrated, "topics_updated": updated,
             "splits": splits, "merges": merges, "dissolved": dissolved,

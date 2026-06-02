@@ -51,7 +51,7 @@ def extract_template(db: QADatabase, kp_id: str, client, debug_cb=None) -> dict:
 
     messages = [{"role": "system", "content": sys}, {"role": "user", "content": usr}]
     try:
-        result, _ = call_flash(client, messages, max_retries=1, debug_callback=debug_cb)
+        result, _ = call_flash(client, messages, max_retries=1, debug=debug_cb)
         return result if isinstance(result, dict) else {}
     except Exception as e:
         from .error_utils import log_exception
@@ -144,7 +144,7 @@ def generate_answer(question: str, kp_id: str, db: QADatabase, client, debug_cb=
 
     messages = [{"role": "system", "content": sys}, {"role": "user", "content": usr}]
     try:
-        result, _ = call_flash(client, messages, max_retries=1, debug_callback=debug_cb)
+        result, _ = call_flash(client, messages, max_retries=1, debug=debug_cb)
         answer = result.get("answer", "") if isinstance(result, dict) else str(result)
     except Exception as e:
         from .error_utils import log_exception
@@ -165,7 +165,7 @@ def generate_answer(question: str, kp_id: str, db: QADatabase, client, debug_cb=
         val_result, _ = call_flash(client, [
             {"role": "system", "content": validate_sys},
             {"role": "user", "content": validate_usr},
-        ], max_retries=1, debug_callback=debug_cb)
+        ], max_retries=1, debug=debug_cb)
         val_result = val_result if isinstance(val_result, dict) else {}
     except Exception as e:
         from .error_utils import log_exception
@@ -189,7 +189,7 @@ def generate_answer(question: str, kp_id: str, db: QADatabase, client, debug_cb=
 def generate_questions(db_path: str, kp_id: str, count: int = 3,
                        difficulty: str = "intermediate",
                        api_url: str = "", api_key: str = "",
-                       debug_callback=None) -> list[dict]:
+                       debug=None) -> list[dict]:
     """Generate practice questions for a KP.
 
     Returns list of {stem, answer, difficulty, validated, score}.
@@ -201,7 +201,7 @@ def generate_questions(db_path: str, kp_id: str, count: int = 3,
         return []
 
     client = create_client(api_url, api_key)
-    template = extract_template(db, kp_id, client, debug_callback)
+    template = extract_template(db, kp_id, client, debug)
 
     questions = []
     for _ in range(count):
@@ -209,7 +209,7 @@ def generate_questions(db_path: str, kp_id: str, count: int = 3,
         if not stem:
             stem = f"Explain the concept of {kp.get('name', 'this topic')}."
 
-        ans_data = generate_answer(stem, kp_id, db, client, debug_callback)
+        ans_data = generate_answer(stem, kp_id, db, client, debug)
         questions.append({
             "stem": stem,
             "answer": ans_data.get("answer", ""),

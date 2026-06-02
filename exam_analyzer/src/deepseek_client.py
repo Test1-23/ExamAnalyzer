@@ -18,10 +18,10 @@ def create_client(api_url: str, api_key: str) -> OpenAI:
     return OpenAI(api_key=api_key, base_url=api_url)
 
 
-def _create_debug_logger(debug_callback):
-    """Return a logging function — uses debug_callback if provided, else print."""
-    if debug_callback:
-        return debug_callback
+def _create_debug_logger(debug):
+    """Return a logging function — uses debug if provided, else print."""
+    if debug:
+        return debug
     return lambda msg: print(msg)
 
 
@@ -105,7 +105,7 @@ def _call_with_retry(
     model: str,
     messages: list,
     max_retries: int = DEFAULT_MAX_RETRIES,
-    debug_callback=None,
+    debug=None,
 ) -> dict:
     """
     Universal retry wrapper.
@@ -113,7 +113,7 @@ def _call_with_retry(
     2nd pass: fall back to text mode if JSON mode failed.
     Returns parsed dict.
     """
-    log = _create_debug_logger(debug_callback)
+    log = _create_debug_logger(debug)
     fail_reason = ""
     total_attempts = 0
 
@@ -165,7 +165,7 @@ def call_flash(
     client: OpenAI,
     messages: list,
     max_retries: int = DEFAULT_MAX_RETRIES,
-    debug_callback=None,
+    debug=None,
 ) -> tuple:
     """Call deepseek-v4-flash with retry + JSON fallback.
 
@@ -173,4 +173,4 @@ def call_flash(
     of API calls made (1 = first try succeeded, 2 = one retry needed, etc.).
     Callers that don't need retry info can unpack with ``result, _ = ...``.
     """
-    return _call_with_retry(client, FLASH_MODEL, messages, max_retries, debug_callback)
+    return _call_with_retry(client, FLASH_MODEL, messages, max_retries, debug)

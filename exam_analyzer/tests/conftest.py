@@ -43,7 +43,7 @@ class MockFlashClient:
         """Map a message-content substring to a JSON response."""
         self.respond_with[keyword] = response
 
-    def __call__(self, client, messages, max_retries=1, debug_callback=None, json_mode=False):
+    def __call__(self, client, messages, max_retries=1, debug=None, json_mode=False):
         """Mimic call_flash(client, messages, ...) → (dict, attempts)."""
         user_content = ""
         for m in messages:

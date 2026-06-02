@@ -101,7 +101,7 @@ def _build_defender_prompt(kp: dict, issues: list[str], qas: list[dict], lang: s
     return [{"role": "system", "content": sys}, {"role": "user", "content": usr}]
 
 
-def refine_kp(db: QADatabase, kp_id: str, client, debug_cb=None) -> dict:
+def refine_kp(db: QADatabase, kp_id: str, client, debug=None) -> dict:
     """Run adversarial refinement on a single KP. Returns final KP state."""
     kp = db.get_kp_by_id(kp_id)
     if not kp:
@@ -128,11 +128,11 @@ def refine_kp(db: QADatabase, kp_id: str, client, debug_cb=None) -> dict:
         # Challenger
         chal_msgs = _build_challenger_prompt(kp, qas, lang, prev_issues)
         try:
-            chal_result, _ = call_flash(client, chal_msgs, max_retries=1, debug_callback=debug_cb)
+            chal_result, _ = call_flash(client, chal_msgs, max_retries=1, debug=debug)
             chal_result = chal_result if isinstance(chal_result, dict) else {}
         except Exception as e:
             from .error_utils import log_exception
-            log_exception(debug_cb, "KP refine", f"challenger,kp={kp_id},round={round_num}", e)
+            log_exception(debug, "KP refine", f"challenger,kp={kp_id},round={round_num}", e)
             break
 
         if chal_result.get("pass"):
@@ -150,11 +150,11 @@ def refine_kp(db: QADatabase, kp_id: str, client, debug_cb=None) -> dict:
         # Defender
         def_msgs = _build_defender_prompt(kp, issues, qas, lang)
         try:
-            def_result, _ = call_flash(client, def_msgs, max_retries=1, debug_callback=debug_cb)
+            def_result, _ = call_flash(client, def_msgs, max_retries=1, debug=debug)
             def_result = def_result if isinstance(def_result, dict) else {}
         except Exception as e:
             from .error_utils import log_exception
-            log_exception(debug_cb, "KP refine", f"defender,kp={kp_id},round={round_num}", e)
+            log_exception(debug, "KP refine", f"defender,kp={kp_id},round={round_num}", e)
             break
 
         if def_result.get("revised_concept"):
@@ -211,15 +211,15 @@ def refine_kp(db: QADatabase, kp_id: str, client, debug_cb=None) -> dict:
         challenge_history=json.dumps(history),
     ))
 
-    if debug_cb:
+    if debug:
         from .error_utils import log_info
-        log_info(debug_cb, "KP refine", f"{kp_id}: quality={quality}, rounds={total_rounds}, "
+        log_info(debug, "KP refine", f"{kp_id}: quality={quality}, rounds={total_rounds}, "
                  f"pass_streak={pass_streak}")
 
     return kp
 
 
-def cross_kp_consistency(db: QADatabase, kp_ids: list[str], client, debug_cb=None) -> dict:
+def cross_kp_consistency(db: QADatabase, kp_ids: list[str], client, debug=None) -> dict:
     """Check consistency across KPs in batches. Returns issues found."""
     if len(kp_ids) < 2:
         return {"issues": []}
@@ -251,11 +251,11 @@ def cross_kp_consistency(db: QADatabase, kp_ids: list[str], client, debug_cb=Non
 
         messages = [{"role": "system", "content": sys}, {"role": "user", "content": usr}]
         try:
-            result, _ = call_flash(client, messages, max_retries=1, debug_callback=debug_cb)
+            result, _ = call_flash(client, messages, max_retries=1, debug=debug)
             return result.get("issues", []) if isinstance(result, dict) else []
         except Exception as e:
             from .error_utils import log_exception
-            log_exception(debug_cb, "KP consistency", "", e)
+            log_exception(debug, "KP consistency", "", e)
             return []
 
     all_issues = []
@@ -269,11 +269,11 @@ def cross_kp_consistency(db: QADatabase, kp_ids: list[str], client, debug_cb=Non
                     all_issues.extend(future.result())
                 except Exception as e:
                     from .error_utils import log_exception
-                    log_exception(debug_cb, "KP consistency", "thread", e)
+                    log_exception(debug, "KP consistency", "thread", e)
 
-    if debug_cb:
+    if debug:
         from .error_utils import log_info
-        log_info(debug_cb, "KP consistency", f"{len(all_issues)} issues across {len(kp_ids)} KPs "
+        log_info(debug, "KP consistency", f"{len(all_issues)} issues across {len(kp_ids)} KPs "
                  f"({len(batches)} batches parallel)")
 
     return {"issues": all_issues}
@@ -285,7 +285,7 @@ def cross_kp_consistency(db: QADatabase, kp_ids: list[str], client, debug_cb=Non
 # KP auto-split: actually split over-broad KPs into two
 # ============================================================
 
-def auto_split_kp(db: QADatabase, kp_id: str, client, debug_cb=None) -> list[str]:
+def auto_split_kp(db: QADatabase, kp_id: str, client, debug=None) -> list[str]:
     """Try to split an over-broad KP into two. Returns new KP IDs (empty if no split)."""
     kp = db.get_kp_by_id(kp_id)
     if not kp:
@@ -343,10 +343,10 @@ def auto_split_kp(db: QADatabase, kp_id: str, client, debug_cb=None) -> list[str
 
     messages = [{"role": "system", "content": sys}, {"role": "user", "content": usr}]
     try:
-        result, _ = call_flash(client, messages, max_retries=1, debug_callback=debug_cb)
+        result, _ = call_flash(client, messages, max_retries=1, debug=debug)
     except Exception as e:
         from .error_utils import log_exception
-        log_exception(debug_cb, "Auto-split KP", f"kp={kp_id}", e)
+        log_exception(debug, "Auto-split KP", f"kp={kp_id}", e)
         return []
 
     if not isinstance(result, dict) or not result.get("split"):
@@ -379,9 +379,9 @@ def auto_split_kp(db: QADatabase, kp_id: str, client, debug_cb=None) -> list[str
                 )
         new_ids.append(new_id)
 
-    if new_ids and debug_cb:
+    if new_ids and debug:
         from .error_utils import log_info
-        log_info(debug_cb, "Auto-split", f"KP {kp_id} into {len(new_ids)} KPs: {new_ids}")
+        log_info(debug, "Auto-split", f"KP {kp_id} into {len(new_ids)} KPs: {new_ids}")
 
     return new_ids
 
@@ -390,7 +390,7 @@ def auto_split_kp(db: QADatabase, kp_id: str, client, debug_cb=None) -> list[str
 # KP auto-merge: actually merge KPs flagged as duplicates
 # ============================================================
 
-def auto_merge_kps(db: QADatabase, issues: list[dict], debug_cb=None) -> int:
+def auto_merge_kps(db: QADatabase, issues: list[dict], debug=None) -> int:
     """Merge KPs flagged by cross_kp_consistency. Returns number merged."""
     merged = 0
     for issue in issues:
@@ -422,9 +422,9 @@ def auto_merge_kps(db: QADatabase, issues: list[dict], debug_cb=None) -> int:
         b_score = (kp_b_data.get("evidence_count", 0),
                    quality_rank.get(kp_b_data.get("quality"), 0))
         if a_score == b_score:
-            if debug_cb:
+            if debug:
                 from .error_utils import log_info
-                log_info(debug_cb, "Auto-merge skip", f"{kp_a} vs {kp_b}")
+                log_info(debug, "Auto-merge skip", f"{kp_a} vs {kp_b}")
             continue
         if b_score > a_score:
             kp_a, kp_b = kp_b, kp_a
@@ -471,8 +471,8 @@ def auto_merge_kps(db: QADatabase, issues: list[dict], debug_cb=None) -> int:
         )
         merged += 1
 
-        if debug_cb:
+        if debug:
             from .error_utils import log_info
-            log_info(debug_cb, "Auto-merge", f"{kp_b} -> {kp_a} ({issue.get('issue', '')})")
+            log_info(debug, "Auto-merge", f"{kp_b} -> {kp_a} ({issue.get('issue', '')})")
 
     return merged

@@ -97,7 +97,7 @@ def _extract_ms_fragments(answer_text: str, qa_id: int, client, debug: Callable)
     """Split a mark scheme answer into individual scoring points. Preserves original wording."""
     messages = FRAGMENT.build(lang_source=answer_text, answer_text=answer_text)
     try:
-        result, _ = call_flash(client, messages, max_retries=1, debug_callback=debug)
+        result, _ = call_flash(client, messages, max_retries=1, debug=debug)
         points = result.get("points", []) if isinstance(result, dict) else []
     except Exception as e:
         from .error_utils import log_exception
@@ -134,7 +134,7 @@ def _classify_qa_against_kps(qa_text: str, answer_text: str, kp_concepts: list[d
                                   qa_text=qa_text[:500], answer_text=answer_text[:500],
                                   kp_list=kp_list)
     try:
-        result, _ = call_flash(client, messages, max_retries=1, debug_callback=debug)
+        result, _ = call_flash(client, messages, max_retries=1, debug=debug)
         scores = result.get("kp_scores", {}) if isinstance(result, dict) else {}
     except Exception as e:
         from .error_utils import log_exception
@@ -468,7 +468,7 @@ def _step_answer_and_grade(qa: "QAPair", top_similar: list, step0_topic: str,
     r1_ok = True
     try:
         messages = _build_answer_prompt(qa.question_text, top_similar)
-        result, retries = call_flash(ctx.client, messages, max_retries=1, debug_callback=ctx.debug)
+        result, retries = call_flash(ctx.client, messages, max_retries=1, debug=ctx.debug)
     except Exception as e:
         ctx.debug(f"  Q{qn} Round1 failed: {e}")
         result = {"answer": "", "used_qa_indices": []}
@@ -504,7 +504,7 @@ def _step_answer_and_grade(qa: "QAPair", top_similar: list, step0_topic: str,
     try:
         grade_msgs = _build_grade_prompt(
             qa.question_text, result.get("answer", ""), qa.answer_text)
-        grade, retries = call_flash(ctx.client, grade_msgs, max_retries=1, debug_callback=ctx.debug)
+        grade, retries = call_flash(ctx.client, grade_msgs, max_retries=1, debug=ctx.debug)
         if isinstance(grade, dict):
             r2_topic = grade.get("topic", "")
             covered = grade.get("covered_points", [])
@@ -626,7 +626,7 @@ def run_pipeline(
     output_path: str,
     intermediate_dir: Optional[str] = None,
     progress_callback: Optional[Callable] = None,
-    debug_callback: Optional[Callable] = None,
+    debug: Optional[Callable] = None,
     log_callback: Optional[Callable] = None,
     shutdown_event=None,
 ) -> str:
@@ -635,8 +635,8 @@ def run_pipeline(
             progress_callback(pct, status)
 
     def _debug(msg: str):
-        if debug_callback:
-            debug_callback(msg)
+        if debug:
+            debug(msg)
         else:
             print(f"[DEBUG] {msg}")
 
@@ -872,7 +872,7 @@ def run_pipeline(
 
         # Cross-paper consistency check after each paper
         try:
-            run_cross_paper_check(db, display_name, debug_callback=_debug)
+            run_cross_paper_check(db, display_name, debug=_debug)
         except Exception as e:
             from .error_utils import log_info
             log_info(_debug, "Cross-paper check", f"failed (non-fatal): {e}")
@@ -948,10 +948,10 @@ def run_pipeline(
 
     # -- Post-processing stages --
     for label, stage_fn in [
-        ("Knowledge graph", lambda: run_knowledge_graph(db, api_url, api_key, debug_callback=_debug)),
+        ("Knowledge graph", lambda: run_knowledge_graph(db, api_url, api_key, debug=_debug)),
         ("KP structural refinement", lambda: _run_kp_refinement(db, client, _debug)),
-        ("Offline analysis", lambda: run_offline_analysis(db, api_url, api_key, progress_callback=_progress, debug_callback=_debug)),
-        ("Pipeline diagnostics", lambda: run_closed_loop(db, api_url, api_key, debug_callback=_debug)),
+        ("Offline analysis", lambda: run_offline_analysis(db, api_url, api_key, progress_callback=_progress, debug=_debug)),
+        ("Pipeline diagnostics", lambda: run_closed_loop(db, api_url, api_key, debug=_debug)),
         ("Evolution cycle", lambda: run_evolution_cycle(db, client, _debug)),
     ]:
         try:

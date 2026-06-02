@@ -706,7 +706,7 @@ class TestPipelineInit:
             intermediate_dir=str(tmp_path),
             progress_callback=lambda pct, msg: progress_calls.append((pct, msg)),
             log_callback=lambda step, detail: log_calls.append((step, detail)),
-            debug_callback=lambda msg: None,
+            debug=lambda msg: None,
             shutdown_event=shutdown,
         )
 
@@ -774,7 +774,7 @@ class TestPipelineInit:
             intermediate_dir=str(tmp_path),
             progress_callback=lambda pct, msg: None,
             log_callback=lambda step, detail: None,
-            debug_callback=lambda msg: None,
+            debug=lambda msg: None,
         )
 
         # 4. Assertions: Phase 1 → QA inserted into DB
@@ -849,7 +849,7 @@ class TestPipelineInit:
             intermediate_dir=str(tmp_path),
             progress_callback=lambda pct, msg: None,
             log_callback=lambda step, detail: None,
-            debug_callback=lambda msg: None,
+            debug=lambda msg: None,
         )
 
         # 4. Assertions: QAs from both papers in DB
