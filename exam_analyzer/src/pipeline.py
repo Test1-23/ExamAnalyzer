@@ -4,6 +4,8 @@ Phase 1: Store QA pairs + Flash-generated knowledge summaries.
 Phase 2: Flash summary -> embedding retrieval -> Pro answer -> Flash grade -> store.
 """
 
+from __future__ import annotations
+
 import os
 import json
 import re
@@ -12,7 +14,10 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from functools import partial
-from typing import Callable, Optional
+from typing import TYPE_CHECKING, Callable, Optional
+
+if TYPE_CHECKING:
+    from .knowledge_base import QADatabase, QARetriever
 
 from .deepseek_client import create_client, call_flash
 from .file_pairer import pair_files
@@ -212,12 +217,23 @@ class PipelineContext:
     retriever, tracker) into a single ctx argument, reducing function
     signatures by 3-6 positional parameters each.
     """
-    client: object
-    db: object
-    debug: Callable
-    display_name: str
-    retriever: object
-    tracker: object
+    client: object            # DeepSeek API client (circular-import risk)
+    db: "QADatabase"           # QADatabase instance
+    debug: Callable[[str], None]  # debug callback
+    display_name: str           # current paper display name
+    retriever: "QARetriever"    # QARetriever instance (circular-import risk)
+    tracker: "ProgressTracker"  # ProgressTracker instance
+
+
+def _handle_thread_error(future, future_map, counters, counter_key, tracker,
+                          debug, label, exc):
+    """Shared exception handler for Phase 1/2 ThreadPoolExecutor loops."""
+    item = future_map[future]
+    from .error_utils import log_info
+    qn = getattr(item, "question_number", "?")
+    log_info(debug, label, f"Q{qn}: {exc}")
+    setattr(counters, counter_key, getattr(counters, counter_key) + 1)
+    tracker.step("")
 
 
 class StageCounters:
@@ -722,11 +738,9 @@ def run_pipeline(
                     try:
                         future.result()
                     except Exception as e:
-                        qa = futures[future]
-                        from .error_utils import log_info
-                        log_info(_debug, "Phase1 worker", f"Q{qa.question_number} failed: {e}")
-                        counters.phase1_worker += 1
-                        tracker.step("")  # count failure too
+                        _handle_thread_error(future, futures, counters,
+                                             "phase1_worker", tracker, _debug,
+                                             "Phase1 worker", e)
 
             from .error_utils import log_info
             log_info(_debug, display_name, f"KB: {db.count()} entries")
@@ -761,11 +775,9 @@ def run_pipeline(
                             db.topic.upsert_link(src, dst, count)
                             topic_links[(src, dst)] = topic_links.get((src, dst), 0) + count
                     except Exception as e:
-                        qa = futures[future]
-                        from .error_utils import log_info
-                        log_info(_debug, "Phase2 worker", f"Q{qa.question_number} failed: {e}")
-                        counters.phase2_worker += 1
-                        tracker.step("")  # count failure too
+                        _handle_thread_error(future, futures, counters,
+                                             "phase2_worker", tracker, _debug,
+                                             "Phase2 worker", e)
 
             for qa_id, summary in qa_results:
                 if qa_id is not None:
