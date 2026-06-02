@@ -84,11 +84,12 @@ def start_analysis():
                 debug=state.debug, log_callback=state.log_step,
                 shutdown_event=state.shutdown_event,
             )
-            if result.healthy:
+            h = result.health
+            if h["status"] == "ok":
                 state.log_step("分析完成", f"知识点已写入 {state.POINTS_FILE}")
             else:
-                failures = result.counters.total_failures()
-                state.log_step("分析完成", f"知识点已写入 {state.POINTS_FILE} (⚠️ {failures} 个阶段有失败)")
+                failed = ", ".join(h["failed_stages"])
+                state.log_step("分析完成", f"知识点已写入 {state.POINTS_FILE} (⚠️ {h['status']}: {failed})")
             with state._state_lock:
                 state.analysis_state["progress"] = 100
                 state.analysis_state["status"] = "分析完成"

@@ -167,6 +167,27 @@ class TestKpStore:
         store.set_membership(99, "kp_x", membership_strength=0.9, is_representative=True)
 
 
+# ═══════════════════════════════════════════════════════════════
+# WSD-027 — per-thread connection pool concurrency stress test
+# ═══════════════════════════════════════════════════════════════
+
+
+class TestConcurrentWrites:
+    """Verify per-thread connection pool handles concurrent writes correctly."""
+
+    def test_concurrent_writes_no_errors(self, mock_db):
+        """50 QAs across 10 threads → zero SQLITE_BUSY, zero lost rows."""
+        from concurrent.futures import ThreadPoolExecutor
+
+        def write(n):
+            mock_db.qa.insert(f"Q{n}", f"A{n}", topic="Test")
+
+        with ThreadPoolExecutor(max_workers=10) as ex:
+            list(ex.map(write, range(50)))
+
+        assert mock_db.qa.count() == 50, f"Expected 50, got {mock_db.qa.count()}"
+
+
 class TestChatStore:
     def test_save_and_get(self, mock_db):
         store = ChatStore(QueryBuilder(mock_db._db))

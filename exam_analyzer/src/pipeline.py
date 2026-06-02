@@ -300,25 +300,36 @@ class StageCounters:
     def total_failures(self) -> int:
         return sum(getattr(self, f) for f in self._fields)
 
+    def nonzero(self) -> dict[str, int]:
+        return {f: getattr(self, f) for f in self._fields if getattr(self, f) > 0}
+
     @property
-    def healthy(self) -> bool:
-        return self.total_failures() == 0
+    def health(self) -> dict:
+        failures = self.total_failures()
+        if failures == 0:
+            return {"status": "ok", "failed_stages": [], "failures": {}}
+        return {
+            "status": "degraded" if failures < 5 else "unhealthy",
+            "failed_stages": list(self.nonzero().keys()),
+            "failures": self.nonzero(),
+            "retries": self.total_retries,
+        }
 
 
 @dataclass(frozen=True)
 class PipelineResult:
     """Return value of run_pipeline() — content + counters for programmatic use.
 
-    ``content`` is the formatted analysis text (unchanged from before).
+    ``content`` is the formatted analysis text.
     ``counters`` is the StageCounters with per-stage failure/retry data.
-    ``healthy`` is True when zero failures occurred.
+    ``health`` is a dict with status, failed_stages, failures, retries.
     """
     content: str
     counters: StageCounters
 
     @property
-    def healthy(self) -> bool:
-        return self.counters.healthy
+    def health(self) -> dict:
+        return self.counters.health
 
 
 _FILENAME_RE = re.compile(r'^(\d+)_([smw])(\d{2})_(\d+)')
