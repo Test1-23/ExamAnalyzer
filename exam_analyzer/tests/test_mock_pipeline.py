@@ -124,11 +124,22 @@ class TestDistiller:
         db = mock_db
         self._seed_db(db, topics=("Binary", "Hex", "Data Compression"))
 
-        # Register Flash responses. The distillation prompt asks to "distill
-        # general knowledge points" — use that as keyword for the batch call.
-        # The review prompt mentions "review" and "extracted content".
+        # _distill_batch expects {"topics": [{"topic": ..., "knowledge_points": [...]}]}
         mock_flash.default = {
-            "content": "## Binary\n\nKnowledge about binary numbering.\n\n## Hex\n\nHexadecimal system.\n\n## Data Compression\n\nLossy vs lossless compression.",
+            "topics": [
+                {"topic": "Binary",
+                 "knowledge_points": [{"concept": "Binary is base-2", "detail": "0s and 1s",
+                                       "pitfall": "Confusing with decimal", "scoring": "Mention base",
+                                       "confidence": "high"}]},
+                {"topic": "Hex",
+                 "knowledge_points": [{"concept": "Hexadecimal is base-16", "detail": "0-9, A-F",
+                                       "pitfall": "A=10 not 11", "scoring": "Show conversion",
+                                       "confidence": "high"}]},
+                {"topic": "Data Compression",
+                 "knowledge_points": [{"concept": "Lossy vs lossless", "detail": "JPEG vs PNG",
+                                       "pitfall": "Lossy is irreversible", "scoring": "State trade-off",
+                                       "confidence": "high"}]},
+            ],
         }
 
         d = Distiller(db, client=None, debug=lambda m: None)
