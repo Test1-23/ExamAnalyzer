@@ -196,3 +196,29 @@ class KpStore:
             "SELECT kp_id FROM qa_kp_membership WHERE qa_id = ?", (qa_id,)
         ).fetchall()
         return [r["kp_id"] for r in rows]
+
+    # ------------------------------------------------------------------
+    # Read helpers
+    # ------------------------------------------------------------------
+
+    def count_members(self, kp_id: str) -> int:
+        """Count QA members for a KP via ``qa_kp_membership`` join table."""
+        row = self._qb.conn.execute(
+            "SELECT COUNT(*) as cnt FROM qa_kp_membership WHERE kp_id=?",
+            (kp_id,),
+        ).fetchone()
+        return row["cnt"] if row else 0
+
+    # ------------------------------------------------------------------
+    # Write helpers
+    # ------------------------------------------------------------------
+
+    def update_evidence_count(self, kp_id: str, count: int) -> None:
+        """Update ``evidence_count`` on a knowledge_point row."""
+        with self._mgr._write_lock:
+            self._mgr._assert_write_locked()
+            self._qb.conn.execute(
+                "UPDATE knowledge_points SET evidence_count=? WHERE id=?",
+                (count, kp_id),
+            )
+            self._mgr.maybe_commit()

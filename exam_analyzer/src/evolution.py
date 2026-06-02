@@ -37,16 +37,10 @@ def run_evolution_cycle(db: QADatabase, client, debug) -> None:
         return
 
     # Fix inconsistent attempt counters
-    scores_above = db.conn.execute(
-        "SELECT COUNT(*) as cnt FROM qa_pairs WHERE success_count > total_attempts"
-    ).fetchone()
-    if scores_above and scores_above["cnt"] > 0:
-        debug("Evolution: fixing inconsistent attempt counters")
-        with db.transaction():
-            db.conn.execute(
-                "UPDATE qa_pairs SET success_count = total_attempts "
-                "WHERE success_count > total_attempts"
-            )
+    fixed = db.qa.fix_inconsistent_counters()
+    if fixed:
+        from .error_utils import log_info
+        log_info(debug, "Evolution", f"fixed {fixed} inconsistent attempt counters")
 
     # Re-review disputed KPs
     disputed = [dict(k) for k in kps if k["quality"] == "disputed"]
@@ -78,11 +72,7 @@ def run_evolution_cycle(db: QADatabase, client, debug) -> None:
     # Detect KPs with QA growth since last review
     for kp in kps:
         if kp["quality"] in ("draft", "accepted", "disputed"):
-            member_rows = db.conn.execute(
-                "SELECT COUNT(*) as cnt FROM qa_kp_membership WHERE kp_id=?",
-                (kp["id"],),
-            ).fetchone()
-            current_members = member_rows["cnt"] if member_rows else 0
+            current_members = db.kp.count_members(kp["id"])
             prev_evidence = kp.get("evidence_count", 0) or 0
             if current_members > prev_evidence and current_members >= 5:
                 growth = current_members - prev_evidence
@@ -96,10 +86,7 @@ def run_evolution_cycle(db: QADatabase, client, debug) -> None:
                         outcome="queued",
                     )
                     with db.transaction():
-                        db.conn.execute(
-                            "UPDATE knowledge_points SET evidence_count=? WHERE id=?",
-                            (current_members, kp["id"]),
-                        )
+                        db.kp.update_evidence_count(kp["id"], current_members)
 
     pending_count = len(db.analysis.get_pending_evolutions())
     if pending_count:
@@ -229,10 +216,8 @@ def _detect_outlier_qas(db: QADatabase, debug) -> int:
             if d > mean_dist + 2.0 * stdev and d > 0.25:
                 qa = qas[i]
                 with db.transaction():
-                    db.conn.execute(
-                        "UPDATE qa_pairs SET last_failure_reason=? WHERE id=?",
-                        (f"outlier: dist={d:.3f} from topic '{topic}' centroid", qa["id"]),
-                    )
+                    db.qa.set_failure_reason(qa["id"],
+                        f"outlier: dist={d:.3f} from topic '{topic}' centroid")
                 flagged += 1
 
     return flagged

@@ -359,3 +359,49 @@ class AnalysisStore:
     def get_dimension_baselines(self) -> list[dict]:
         rows = self._qb.get_all("dimension_baselines")
         return [dict(r) for r in rows]
+
+    # ------------------------------------------------------------------
+    # Paper-level aggregated stats (pipeline Phase 2 summary)
+    # ------------------------------------------------------------------
+
+    def get_feedback_stats_for_paper(self, paper: str) -> dict:
+        """Aggregated retrieval quality counters for one paper's QAs.
+
+        Returns ``{tot_ret, tot_used, tot_cov, tot_miss}`` with zero-filled
+        defaults when no feedback rows exist.
+        """
+        row = self._qb.conn.execute(
+            """SELECT SUM(retrieval_count) as tot_ret, SUM(used_qa_count) as tot_used,
+                      SUM(covered_count) as tot_cov, SUM(missed_count) as tot_miss
+               FROM question_feedback WHERE qa_id IN
+               (SELECT id FROM qa_pairs WHERE paper = ?)""",
+            (paper,)
+        ).fetchone()
+        if row:
+            return {"tot_ret": row["tot_ret"] or 0, "tot_used": row["tot_used"] or 0,
+                    "tot_cov": row["tot_cov"] or 0, "tot_miss": row["tot_miss"] or 0}
+        return {"tot_ret": 0, "tot_used": 0, "tot_cov": 0, "tot_miss": 0}
+
+    def get_miss_category_breakdown(self, paper: str) -> dict:
+        """Aggregated miss-category totals for a paper.
+
+        Parses JSON ``miss_categories`` from question_feedback rows belonging
+        to *paper* and returns ``{category: count}`` for non-zero categories.
+        """
+        import json
+        cat_rows = self._qb.conn.execute(
+            """SELECT miss_categories FROM question_feedback
+               WHERE qa_id IN (SELECT id FROM qa_pairs WHERE paper = ?)
+               AND miss_categories != ''""",
+            (paper,)
+        ).fetchall()
+        totals = {"knowledge_gap": 0, "misinterpretation": 0,
+                  "insufficient_detail": 0, "retrieval_quality": 0}
+        for r in cat_rows:
+            try:
+                cats = json.loads(r["miss_categories"])
+                for k in totals:
+                    totals[k] += cats.get(k, 0)
+            except Exception:
+                continue
+        return {k: v for k, v in totals.items() if v > 0}

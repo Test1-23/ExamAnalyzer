@@ -182,3 +182,41 @@ class QaStore:
             "FROM qa_pairs WHERE id = ?", (qa_id,)
         ).fetchone()
         return dict(row) if row else {}
+
+    # ------------------------------------------------------------------
+    # Data integrity helpers
+    # ------------------------------------------------------------------
+
+    def fix_inconsistent_counters(self) -> int:
+        """Cap ``success_count`` at ``total_attempts`` where inconsistent.
+
+        Returns the number of rows repaired (0 if already consistent).
+        """
+        with self._mgr._write_lock:
+            self._mgr._assert_write_locked()
+            row = self._qb.conn.execute(
+                "SELECT COUNT(*) as cnt FROM qa_pairs "
+                "WHERE success_count > total_attempts"
+            ).fetchone()
+            if not row or row["cnt"] == 0:
+                return 0
+            cur = self._qb.conn.execute(
+                "UPDATE qa_pairs SET success_count = total_attempts "
+                "WHERE success_count > total_attempts"
+            )
+            self._mgr.maybe_commit()
+            return cur.rowcount
+
+    def set_failure_reason(self, qa_id: int, reason: str) -> None:
+        """Set ``last_failure_reason`` without modifying attempt counters.
+
+        Use this for flagging outliers / anomalies — it does NOT increment
+        ``total_attempts`` (unlike :meth:`record_attempt`).
+        """
+        with self._mgr._write_lock:
+            self._mgr._assert_write_locked()
+            self._qb.conn.execute(
+                "UPDATE qa_pairs SET last_failure_reason=? WHERE id=?",
+                (reason, qa_id),
+            )
+            self._mgr.maybe_commit()

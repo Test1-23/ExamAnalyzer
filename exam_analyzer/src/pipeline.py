@@ -826,41 +826,19 @@ def run_pipeline(
                 log_info(_debug, display_name, f"Phase2: {succeeded}/{total} succeeded, {total - succeeded} failed")
 
             try:
-                fb_rows = db.conn.execute(
-                    """SELECT SUM(retrieval_count) as tot_ret, SUM(used_qa_count) as tot_used,
-                              SUM(covered_count) as tot_cov, SUM(missed_count) as tot_miss
-                       FROM question_feedback WHERE qa_id IN
-                       (SELECT id FROM qa_pairs WHERE paper = ?)""",
-                    (display_name,)
-                ).fetchone()
-                if fb_rows and fb_rows["tot_ret"]:
-                    utility = fb_rows["tot_used"] / fb_rows["tot_ret"] * 100 if fb_rows["tot_ret"] else 0
+                fb = db.analysis.get_feedback_stats_for_paper(display_name)
+                if fb["tot_ret"]:
+                    utility = fb["tot_used"] / fb["tot_ret"] * 100 if fb["tot_ret"] else 0
                     from .error_utils import log_info
-                    log_info(_debug, display_name, f"Phase2 stats: retrieved={fb_rows['tot_ret']}, "
-                           f"used={fb_rows['tot_used']} (utility={utility:.0f}%), "
-                           f"covered={fb_rows['tot_cov']}, missed={fb_rows['tot_miss']}")
+                    log_info(_debug, display_name, f"Phase2 stats: retrieved={fb['tot_ret']}, "
+                           f"used={fb['tot_used']} (utility={utility:.0f}%), "
+                           f"covered={fb['tot_cov']}, missed={fb['tot_miss']}")
 
-                # Miss category breakdown
-                cat_rows = db.conn.execute(
-                    """SELECT miss_categories FROM question_feedback
-                       WHERE qa_id IN (SELECT id FROM qa_pairs WHERE paper = ?)
-                       AND miss_categories != ''""",
-                    (display_name,)
-                ).fetchall()
-                if cat_rows:
-                    totals = {"knowledge_gap": 0, "misinterpretation": 0,
-                              "insufficient_detail": 0, "retrieval_quality": 0}
-                    for r in cat_rows:
-                        try:
-                            cats = json.loads(r["miss_categories"])
-                            for k in totals:
-                                totals[k] += cats.get(k, 0)
-                        except Exception as e:
-                            from .error_utils import log_info
-                            log_info(_debug, "Stats", f"miss_categories parse: {e}")
+                totals = db.analysis.get_miss_category_breakdown(display_name)
+                if totals:
                     from .error_utils import log_info
                     log_info(_debug, display_name, "MissCat: " +
-                           ", ".join(f"{k}={v}" for k, v in totals.items() if v > 0))
+                           ", ".join(f"{k}={v}" for k, v in totals.items()))
             except Exception as e:
                 from .error_utils import log_info
                 log_info(_debug, "Stats", f"Phase2 stats collection: {e}")
