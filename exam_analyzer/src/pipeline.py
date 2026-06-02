@@ -225,15 +225,38 @@ class PipelineContext:
     tracker: "ProgressTracker"  # ProgressTracker instance
 
 
-def _handle_thread_error(future, future_map, counters, counter_key, tracker,
-                          debug, label, exc):
-    """Shared exception handler for Phase 1/2 ThreadPoolExecutor loops."""
-    item = future_map[future]
-    from .error_utils import log_info
-    qn = getattr(item, "question_number", "?")
-    log_info(debug, label, f"Q{qn}: {exc}")
-    setattr(counters, counter_key, getattr(counters, counter_key) + 1)
-    tracker.step("")
+def _run_parallel(items, worker_fn, counters, counter_key, tracker, debug,
+                    label, on_success=None):
+    """Generic ThreadPoolExecutor loop for Phase 1/2 workers.
+
+    Each item in *items* is either a single value or a tuple of positional
+    args passed to ``worker_fn``.  On success, calls ``on_success(result)``
+    if provided.  On failure, increments ``counters.<counter_key>`` and logs.
+    """
+    with ThreadPoolExecutor(max_workers=get_worker_limit(len(items))) as executor:
+        futures = {}
+        for item in items:
+            if isinstance(item, tuple):
+                future = executor.submit(worker_fn, *item)
+                # Use first element as the identity for error reporting
+                identity = item[0]
+            else:
+                future = executor.submit(worker_fn, item)
+                identity = item
+            futures[future] = identity
+        for future in as_completed(futures):
+            try:
+                result = future.result()
+                if on_success:
+                    on_success(result)
+            except Exception as e:
+                identity = futures[future]
+                from .error_utils import log_info
+                qn = getattr(identity, "question_number", "?")
+                log_info(debug, label, f"Q{qn}: {e}")
+                setattr(counters, counter_key,
+                        getattr(counters, counter_key) + 1)
+                tracker.step("")
 
 
 class StageCounters:
@@ -356,7 +379,8 @@ def _run_kp_refinement(db, client, debug):
 # ============================================================
 
 
-def _phase1_worker(qa, existing_topics, ctx: PipelineContext):
+def _phase1_worker(qa: "QAPair", existing_topics: list | None,
+                    ctx: PipelineContext) -> int:
     """Phase 1: summary → insert QA → extract MS fragments → assign topic."""
     t0 = time.time()
     summary, topic = _generate_summary(
@@ -394,7 +418,8 @@ def _phase1_worker(qa, existing_topics, ctx: PipelineContext):
 # ============================================================
 
 
-def _step_summarize_retrieve(qa, wmap, extopics, ctx: PipelineContext):
+def _step_summarize_retrieve(qa: "QAPair", wmap: dict, extopics: list | None,
+                              ctx: PipelineContext) -> tuple:
     """Flash summary + dual-channel retrieval → top_similar list."""
     qn = qa.question_number
     t0 = time.time()
@@ -434,7 +459,8 @@ def _step_summarize_retrieve(qa, wmap, extopics, ctx: PipelineContext):
     return summary, step0_topic, top_similar, all_similar
 
 
-def _step_answer_and_grade(qa, top_similar, step0_topic, ctx: PipelineContext):
+def _step_answer_and_grade(qa: "QAPair", top_similar: list, step0_topic: str,
+                            ctx: PipelineContext) -> tuple:
     """Round 1: Flash answers + Round 2: Flash grades → feedback data."""
     qn = qa.question_number
     # Round 1: Flash answers
@@ -497,10 +523,12 @@ def _step_answer_and_grade(qa, top_similar, step0_topic, ctx: PipelineContext):
     return used_indices, used_ids, covered, missed_texts, miss_cats_json, r2_topic
 
 
-def _step_insert_and_feedback(qa, summary, step0_topic, r2_topic,
-                               all_similar, top_similar, used_indices,
-                               covered, missed_texts, miss_cats_json,
-                               ctx: PipelineContext):
+def _step_insert_and_feedback(qa: "QAPair", summary: str, step0_topic: str,
+                               r2_topic: str, all_similar: list,
+                               top_similar: list, used_indices: list,
+                               covered: list, missed_texts: list,
+                               miss_cats_json: str,
+                               ctx: PipelineContext) -> tuple:
     """DB insert + feedback + cross-topic ref collection."""
     topic = r2_topic or step0_topic
     cross_refs = {}
@@ -527,8 +555,9 @@ def _step_insert_and_feedback(qa, summary, step0_topic, r2_topic,
     return qa_id, topic, cross_refs
 
 
-def _step_fragment_and_kp(qa, qa_id, topic, used_ids, covered,
-                           missed_texts, ctx: PipelineContext):
+def _step_fragment_and_kp(qa: "QAPair", qa_id: int, topic: str,
+                           used_ids: set, covered: list, missed_texts: list,
+                           ctx: PipelineContext) -> None:
     """Extract MS fragments + LLM KP classification + behavior recording."""
     try:
         fragments = _extract_ms_fragments(qa.answer_text, qa_id, ctx.client, ctx.debug)
@@ -560,7 +589,8 @@ def _step_fragment_and_kp(qa, qa_id, topic, used_ids, covered,
     ctx.tracker.step("")
 
 
-def _process_one_question_inner(qa, wmap, extopics, ctx: PipelineContext):
+def _process_one_question_inner(qa: "QAPair", wmap: dict, extopics: list | None,
+                                 ctx: PipelineContext) -> tuple:
     """Orchestrate the 4-step Phase 2 processing for a single question."""
     qn = qa.question_number
 
@@ -732,15 +762,8 @@ def run_pipeline(
             _p1_worker = partial(_phase1_worker, existing_topics=existing_topics, ctx=ctx)
 
             tracker.step("QA pairing")  # Stage 2 complete
-            with ThreadPoolExecutor(max_workers=get_worker_limit(len(qa_pairs))) as executor:
-                futures = {executor.submit(_p1_worker, qa): qa for qa in qa_pairs}
-                for future in as_completed(futures):
-                    try:
-                        future.result()
-                    except Exception as e:
-                        _handle_thread_error(future, futures, counters,
-                                             "phase1_worker", tracker, _debug,
-                                             "Phase1 worker", e)
+            _run_parallel(qa_pairs, _p1_worker, counters, "phase1_worker",
+                           tracker, _debug, "Phase1 worker")
 
             from .error_utils import log_info
             log_info(_debug, display_name, f"KB: {db.count()} entries")
@@ -764,20 +787,18 @@ def run_pipeline(
 
             tracker.step("QA pairing")  # Stage 2 complete
             qa_results = []
-            with ThreadPoolExecutor(max_workers=get_worker_limit(len(qa_pairs))) as executor:
-                futures = {executor.submit(_p2_processor, qa, weight_map, existing_topics): qa
-                           for qa in qa_pairs}
-                for future in as_completed(futures):
-                    try:
-                        qa_id, summary, cross_refs = future.result()
-                        qa_results.append((qa_id, summary))
-                        for (src, dst), count in cross_refs.items():
-                            db.topic.upsert_link(src, dst, count)
-                            topic_links[(src, dst)] = topic_links.get((src, dst), 0) + count
-                    except Exception as e:
-                        _handle_thread_error(future, futures, counters,
-                                             "phase2_worker", tracker, _debug,
-                                             "Phase2 worker", e)
+
+            def _on_phase2_success(result):
+                qa_id, summary, cross_refs = result
+                qa_results.append((qa_id, summary))
+                for (src, dst), count in cross_refs.items():
+                    db.topic.upsert_link(src, dst, count)
+                    topic_links[(src, dst)] = topic_links.get((src, dst), 0) + count
+
+            _p2_items = [(qa, weight_map, existing_topics) for qa in qa_pairs]
+            _run_parallel(_p2_items, _p2_processor, counters, "phase2_worker",
+                           tracker, _debug, "Phase2 worker",
+                           on_success=_on_phase2_success)
 
             for qa_id, summary in qa_results:
                 if qa_id is not None:
