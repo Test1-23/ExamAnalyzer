@@ -103,11 +103,11 @@ class Distiller:
         if not groups:
             return ""
 
-        weights = self._db.get_all_weights()
+        weights = self._db.qa.get_all_weights()
         topic_meta = self._compute_topic_meta(groups, weights)
         self._build_prompts(groups)
 
-        cache = self._db.get_distillation_cache()
+        cache = self._db.analysis.get_distillation_cache()
         topic_items, cached_results, skipped_count = self._prepare_topic_items(
             groups, weights, cache, topic_meta)
 
@@ -320,7 +320,7 @@ class Distiller:
             # Cache fingerprint
             qa_ids_sorted = sorted(qa["id"] for qa in qas)
             qa_ids_hash = hashlib.md5(",".join(map(str, qa_ids_sorted)).encode()).hexdigest()
-            cached_state = self._db.get_cached_topic_state(topic)
+            cached_state = self._db.analysis.get_cached_topic_state(topic)
 
             if (cached_state
                     and cached_state["qa_count"] == len(qas)
@@ -410,7 +410,7 @@ class Distiller:
             kps = []
 
         if not kps:
-            cache = self._db.get_distillation_cache()
+            cache = self._db.analysis.get_distillation_cache()
             if topic in cache:
                 from .error_utils import log_info
                 log_info(self._debug, "Distillation fallback", f"'{topic}', reusing cached content")
@@ -418,7 +418,7 @@ class Distiller:
             return (topic, "")
 
         content = self._format_kp_text(kps, topic, marker)
-        self._db.upsert_distillation_cache(topic, n_qa, qa_ids_hash, content)
+        self._db.analysis.upsert_distillation_cache(topic, n_qa, qa_ids_hash, content)
         return (topic, content)
 
     def _distill_batch(self, batch_topics: list) -> dict[str, str]:
@@ -492,7 +492,7 @@ class Distiller:
                 log_info(self._debug, "Batch name mismatch", f"model returned '{t_name}'")
 
             content = self._format_kp_text(kps, t_name, marker)
-            self._db.upsert_distillation_cache(t_name, n_qa, qa_ids_hash, content)
+            self._db.analysis.upsert_distillation_cache(t_name, n_qa, qa_ids_hash, content)
             batch_results[t_name] = content
 
         # Log missed topics

@@ -362,25 +362,25 @@ def _phase1_worker(qa, existing_topics, ctx: PipelineContext):
     summary, topic = _generate_summary(
         qa.question_text, qa.answer_text, ctx.client, ctx.debug,
         existing_topics=existing_topics)
-    ctx.db.log_api_call("summary", "flash", ctx.display_name,
+    ctx.db.analysis.log_api_call("summary", "flash", ctx.display_name,
                         qa.question_number, int((time.time() - t0) * 1000),
                         success=True, output_size=len(summary))
-    qa_id = ctx.db.insert(
+    qa_id = ctx.db.qa.insert(
         question_text=qa.question_text, answer_text=qa.answer_text,
         knowledge_summary=summary, topic=topic,
         paper=ctx.display_name, question_number=qa.question_number,
         parent_question=qa.parent_question)
-    ctx.db.record_attempt(qa_id, success=True)
+    ctx.db.qa.record_attempt(qa_id, success=True)
 
     try:
         fragments = _extract_ms_fragments(qa.answer_text, qa_id, ctx.client, ctx.debug)
         if fragments:
             with ctx.db.transaction():
-                ctx.db.insert_fragments_batch(fragments)
+                ctx.db.fragment.insert_batch(fragments)
                 topic_id = make_topic_id(topic)
-                ctx.db.upsert_dynamic_topic(topic_id, name=topic, quality="embryonic")
+                ctx.db.topic.upsert(topic_id, name=topic, quality="embryonic")
                 for frag in fragments:
-                    ctx.db.set_fragment_membership(
+                    ctx.db.topic.set_fragment_membership(
                         frag["point_id"], topic_id, loyalty=0.5)
     except Exception as e:
         ctx.debug(f"  fragment extraction failed for Q{qa.question_number}: {e}")
@@ -401,7 +401,7 @@ def _step_summarize_retrieve(qa, wmap, extopics, ctx: PipelineContext):
     summary, step0_topic = _generate_summary(
         qa.question_text, qa.answer_text, ctx.client, ctx.debug,
         existing_topics=extopics)
-    ctx.db.log_api_call("summary", "flash", ctx.display_name, qn,
+    ctx.db.analysis.log_api_call("summary", "flash", ctx.display_name, qn,
                         int((time.time() - t0) * 1000), success=True,
                         output_size=len(summary))
     ctx.tracker.step("")
@@ -419,7 +419,7 @@ def _step_summarize_retrieve(qa, wmap, extopics, ctx: PipelineContext):
     )[:4]
 
     # Phase 3: Include stable KP text as additional reference material
-    stable_kps = ctx.db.get_stable_topics()
+    stable_kps = ctx.db.topic.get_stable()
     if stable_kps:
         kp_refs = [{
             "id": -1,
@@ -447,7 +447,7 @@ def _step_answer_and_grade(qa, top_similar, step0_topic, ctx: PipelineContext):
         ctx.debug(f"  Q{qn} Round1 failed: {e}")
         result = {"answer": "", "used_qa_indices": []}
         r1_ok = False
-    ctx.db.log_api_call("answer", "flash", ctx.display_name, qn,
+    ctx.db.analysis.log_api_call("answer", "flash", ctx.display_name, qn,
                         int((time.time() - t0) * 1000), success=r1_ok,
                         output_size=len(result.get("answer", "")))
     ctx.tracker.step("")
@@ -458,7 +458,7 @@ def _step_answer_and_grade(qa, top_similar, step0_topic, ctx: PipelineContext):
         if isinstance(idx, (int, float)) and 1 <= int(idx) <= len(top_similar):
             qa_ref = top_similar[int(idx) - 1]
             if not qa_ref.get("_is_kp"):
-                ctx.db.record_attempt(qa_ref["id"], success=True)
+                ctx.db.qa.record_attempt(qa_ref["id"], success=True)
                 used_ids.add(qa_ref["id"])
     for qa_ref in top_similar:
         if qa_ref.get("_is_kp"):
@@ -467,7 +467,7 @@ def _step_answer_and_grade(qa, top_similar, step0_topic, ctx: PipelineContext):
             ref_topic = qa_ref.get("topic", "")
             reason = ("topic_mismatch" if (ref_topic and step0_topic
                       and ref_topic != step0_topic) else "retrieval_irrelevant")
-            ctx.db.record_attempt(qa_ref["id"], success=False, reason=reason)
+            ctx.db.qa.record_attempt(qa_ref["id"], success=False, reason=reason)
 
     # Round 2: Flash grades
     t0 = time.time()
@@ -490,7 +490,7 @@ def _step_answer_and_grade(qa, top_similar, step0_topic, ctx: PipelineContext):
         r2_ok = False
 
     missed_texts, miss_cats_json = _parse_missed_points(missed_raw)
-    ctx.db.log_api_call("grade", "flash", ctx.display_name, qn,
+    ctx.db.analysis.log_api_call("grade", "flash", ctx.display_name, qn,
                         int((time.time() - t0) * 1000), success=r2_ok,
                         output_size=len(str(grade)))
     ctx.tracker.step("")
@@ -511,13 +511,13 @@ def _step_insert_and_feedback(qa, summary, step0_topic, r2_topic,
                 key = (topic, ref_topic)
                 cross_refs[key] = cross_refs.get(key, 0) + 1
 
-    qa_id = ctx.db.insert(
+    qa_id = ctx.db.qa.insert(
         question_text=qa.question_text, answer_text=qa.answer_text,
         knowledge_summary=summary, topic=topic,
         paper=ctx.display_name, question_number=qa.question_number,
         parent_question=qa.parent_question)
-    ctx.db.record_attempt(qa_id, success=True)
-    ctx.db.log_question_feedback(
+    ctx.db.qa.record_attempt(qa_id, success=True)
+    ctx.db.analysis.log_question_feedback(
         qa_id=qa_id, retrieval_count=len(all_similar),
         used_qa_count=len(used_indices),
         step0_topic=step0_topic, round2_topic=r2_topic,
@@ -533,11 +533,11 @@ def _step_fragment_and_kp(qa, qa_id, topic, used_ids, covered,
     try:
         fragments = _extract_ms_fragments(qa.answer_text, qa_id, ctx.client, ctx.debug)
         if fragments:
-            ctx.db.insert_fragments_batch(fragments)
+            ctx.db.fragment.insert_batch(fragments)
             topic_id = make_topic_id(topic)
-            ctx.db.upsert_dynamic_topic(topic_id, name=topic, quality="embryonic")
+            ctx.db.topic.upsert(topic_id, name=topic, quality="embryonic")
             for frag in fragments:
-                ctx.db.set_fragment_membership(
+                ctx.db.topic.set_fragment_membership(
                     frag["point_id"], topic_id, loyalty=0.5)
 
         # Layer 1: LLM KP classification (only when KPs exist)

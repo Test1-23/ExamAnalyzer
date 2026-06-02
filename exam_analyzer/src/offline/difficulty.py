@@ -410,7 +410,7 @@ def _phase4_topic_aggregation(db):
         mode = max(counts, key=counts.get) if any(counts.values()) else "intermediate"
         spread = (counts["basic"] > 0 and counts["advanced"] > 0)
 
-        db.upsert_topic_difficulty(
+        db.topic.upsert_difficulty(
             topic=topic,
             qa_count=len(qas),
             basic_count=counts["basic"],

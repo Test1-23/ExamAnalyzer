@@ -315,4 +315,4 @@ class QARetriever:
 
     def clear_chat_history(self, session_id: str):
         """Proxy to clear chat history in underlying DB."""
-        self._db.clear_chat_history(session_id)
+        self._db.chat.clear_history(session_id)
