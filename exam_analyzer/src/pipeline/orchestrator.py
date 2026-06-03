@@ -35,7 +35,7 @@ from ..models import ExtractedPair, QAPair
 from ..offline import run_offline_analysis
 from ..pdf_extractor import extract_pdf
 from ..diagnostics import run_closed_loop, run_cross_paper_check
-from ..prompt_factory import FRAGMENT, QA_CLASSIFY
+from ..prompt_factory import PromptType, PromptBuilder
 from ..prompts.pipeline_prompts import stage2_qa_pairing, _generate_summary, _build_answer_prompt, _build_grade_prompt
 from ..topic_merger import merge_similar_topics
 from ..reviewer import review_distilled
@@ -103,7 +103,7 @@ def _record_fragment_help(used_ids: set, covered: list, missed_texts: list,
 
 def _extract_ms_fragments(answer_text: str, qa_id: int, client, debug: Callable) -> list[dict]:
     """Split a mark scheme answer into individual scoring points. Preserves original wording."""
-    messages = FRAGMENT.build(lang_source=answer_text, answer_text=answer_text)
+    messages = PromptBuilder.build(PromptType.FRAGMENT, lang_source=answer_text, answer_text=answer_text)
     try:
         result, _ = call_flash(client, messages, max_retries=1, debug=debug)
         points = result.get("points", []) if isinstance(result, dict) else []
@@ -137,9 +137,9 @@ def _classify_qa_against_kps(qa_text: str, answer_text: str, kp_concepts: list[d
         kp_concepts = sorted(kp_concepts, key=lambda k: k.get("evidence", 0), reverse=True)[:MAX_KPS]
 
     kp_list = "\n".join(f"[{k['id']}] {k['concept']}" for k in kp_concepts)
-    messages = QA_CLASSIFY.build(lang_source=qa_text + answer_text,
-                                  qa_text=qa_text[:500], answer_text=answer_text[:500],
-                                  kp_list=kp_list)
+    messages = PromptBuilder.build(PromptType.KP_CLASSIFY, lang_source=qa_text + answer_text,
+                                    qa_text=qa_text[:500], answer_text=answer_text[:500],
+                                    kp_list=kp_list)
     try:
         result, _ = call_flash(client, messages, max_retries=1, debug=debug)
         scores = result.get("kp_scores", {}) if isinstance(result, dict) else {}

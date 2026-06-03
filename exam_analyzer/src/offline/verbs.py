@@ -7,7 +7,7 @@ from ..deepseek_client import create_client, call_flash
 from ..knowledge_base import QADatabase
 from ..embedding_cluster import _get_model, detect_content_lang, TOPIC_EMBED_MODEL
 from ..models import VerbPatternSpec, DependencySpec
-from ..prompt_factory import VERB_PATTERN_SUMMARY, DIFFICULTY_RATE, DEPENDENCY_VALIDATE
+from ..prompt_factory import PromptType, PromptBuilder
 from ..logger import get_logger
 from ..utils import get_worker_limit
 
@@ -255,7 +255,7 @@ def _phase3_summarize_patterns(verb_groups, verb_stats, db, client, debug):
         for i, qa in enumerate(qas[:15]):
             qa_texts += f"Q{i+1}: {qa['question_text']}\nA: {qa['answer_text'][:300]}\n\n"
 
-        messages = VERB_PATTERN_SUMMARY.build(
+        messages = PromptBuilder.build(PromptType.VERB_PATTERN,
             lang=lang, verb=verb, sample_count=stat["sample_count"],
             avg_answer_length=stat["avg_answer_length"],
             bullet_pct=f"{stat['bullet_ratio']*100:.0f}%",

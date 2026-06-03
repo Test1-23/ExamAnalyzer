@@ -7,7 +7,7 @@ from ..deepseek_client import create_client, call_flash
 from ..knowledge_base import QADatabase
 from ..embedding_cluster import _get_model, detect_content_lang, TOPIC_EMBED_MODEL
 from ..models import VerbPatternSpec, DependencySpec
-from ..prompt_factory import VERB_PATTERN_SUMMARY, DIFFICULTY_RATE, DEPENDENCY_VALIDATE
+from ..prompt_factory import PromptType, PromptBuilder
 from ..logger import get_logger
 from ..utils import get_worker_limit
 
@@ -131,7 +131,7 @@ def _phase1_difficulty_benchmark(db, qas, client, debug):
         for i, qa in enumerate(batch):
             qa_block += f"[{i}] Q: {qa['question_text']}\nA: {qa['answer_text'][:300]}\n\n"
 
-        messages = DIFFICULTY_RATE.build(lang=lang, qa_block=qa_block)
+        messages = PromptBuilder.build(PromptType.DIFFICULTY, lang=lang, qa_block=qa_block)
         try:
             result, _ = call_flash(client, messages, max_retries=1, debug=debug)
             ratings = result.get("ratings", []) if isinstance(result, dict) else []
@@ -361,7 +361,7 @@ def _phase3_classify_and_confirm(db, qas, boundaries, client, verb_data, debug):
             for i, qa in enumerate(batch):
                 qa_block += f"[{i}] Q: {qa['question_text']}\nA: {qa['answer_text'][:300]}\n\n"
 
-            messages = DIFFICULTY_RATE.build(lang=lang, qa_block=qa_block)
+            messages = PromptBuilder.build(PromptType.DIFFICULTY, lang=lang, qa_block=qa_block)
             try:
                 result, _ = call_flash(client, messages, max_retries=1, debug=debug)
                 ratings = result.get("ratings", []) if isinstance(result, dict) else []

@@ -7,7 +7,7 @@ from ..deepseek_client import create_client, call_flash
 from ..knowledge_base import QADatabase
 from ..embedding_cluster import _get_model, detect_content_lang, TOPIC_EMBED_MODEL
 from ..models import VerbPatternSpec, DependencySpec
-from ..prompt_factory import VERB_PATTERN_SUMMARY, DIFFICULTY_RATE, DEPENDENCY_VALIDATE
+from ..prompt_factory import PromptType, PromptBuilder
 from ..logger import get_logger
 from ..utils import get_worker_limit
 
@@ -167,7 +167,7 @@ def _phase1_validate_candidates(db, candidates, client, debug):
                             f"  A QAs: {topic_texts.get(pre, '')[:600]}\n"
                             f"  B QAs: {topic_texts.get(dep, '')[:600]}\n\n")
 
-        messages = DEPENDENCY_VALIDATE.build(lang=lang, pairs_block=pairs_block)
+        messages = PromptBuilder.build(PromptType.DEPENDENCY, lang=lang, pairs_block=pairs_block)
         try:
             result, _ = call_flash(client, messages, max_retries=1, debug=debug)
             pairs = result.get("pairs", []) if isinstance(result, dict) else []

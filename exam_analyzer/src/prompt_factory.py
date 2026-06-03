@@ -95,6 +95,10 @@ class PromptType(Enum):
     VERB_PATTERN = "verb_pattern"    # Offline: summarise command-verb patterns
     DIFFICULTY = "difficulty"        # Offline: rate question difficulty
     DEPENDENCY = "dependency"        # Offline: validate topic dependencies
+    KP_CHALLENGER = "kp_challenger"    # Adversarial: challenger finds flaws in KP
+    KP_DEFENDER = "kp_defender"        # Adversarial: defender revises KP
+    KP_CONSISTENCY = "kp_consistency"  # Adversarial: cross-KP consistency check
+    KP_SPLIT = "kp_split"             # Adversarial: decide whether to split a KP
 
 
 # ============================================================
@@ -349,19 +353,91 @@ _DEPENDENCY_TMPL = PromptTemplate(
              '返回: {"pairs": [{"index": 0, "score": 2, "reason": "..."}, ...]}'),
 )
 
+_KP_CHALLENGER_TMPL = PromptTemplate(
+    en_system="You are a rigorous knowledge reviewer. Find flaws in this knowledge point. Output JSON.",
+    zh_system="你是一个严谨的知识审核专家。找出知识点的缺陷。Output JSON。",
+    en_user=("Knowledge Point: [%(kp_name)s]\n"
+             "Concept: %(kp_concept)s\n"
+             "Detail: %(kp_detail)s\n\n"
+             "Supporting QAs:\n%(qa_texts)s\n"
+             "%(prev_challenges)s"
+             "Find issues:\n"
+             "1. Does the concept statement match ALL supporting QAs? (over-generalization?)\n"
+             "2. Is any important nuance from the QAs missing in the concept/detail?\n"
+             "3. Are there edge cases the KP doesn't cover?\n"
+             "4. Could this KP be split into two separate concepts?\n\n"
+             "If you find NO issues, return PASS. Otherwise list specific problems.\n"
+             'Return JSON: {"pass": true/false, "issues": ["issue 1", "issue 2"], '
+             '"severity": "critical|minor|cosmetic"}'),
+    zh_user=("知识点: [%(kp_name)s]\n"
+             "概念: %(kp_concept)s\n"
+             "细节: %(kp_detail)s\n\n"
+             "支撑QA:\n%(qa_texts)s\n"
+             "%(prev_challenges)s"
+             "找出问题:\n"
+             "1. 概念陈述是否与所有支撑QA一致？\n"
+             "2. 是否遗漏了QA中的重要细节？\n"
+             "3. 是否有边缘情况未覆盖？\n"
+             "4. 这个KP是否应拆分为两个独立概念？\n\n"
+             "如无问题返回PASS，否则列出具体问题。\n"
+             '返回 JSON: {"pass": true/false, "issues": ["问题1"], "severity": "critical|minor|cosmetic"}'),
+)
 
-# ============================================================
-# Backward-compatible aliases (so existing callers don't break immediately)
-# ============================================================
+_KP_DEFENDER_TMPL = PromptTemplate(
+    en_system="You are a knowledge curator. Defend or revise this knowledge point against challenges. Output JSON.",
+    zh_system="你是一个知识策展人。针对挑战为知识点辩护或修订。Output JSON。",
+    en_user=("Knowledge Point: [%(kp_name)s]\n"
+             "Current concept: %(kp_concept)s\n"
+             "Current detail: %(kp_detail)s\n\n"
+             "Challenges:\n%(issues_text)s\n\n"
+             "Supporting QAs:\n%(qa_texts)s\n"
+             "For each challenge: either revise the KP to address it, or explain why it's invalid.\n"
+             "Return the revised concept and detail.\n"
+             'Return JSON: {"revised_concept": "...", "revised_detail": "...", '
+             '"changes_made": ["change 1"], "challenges_dismissed": ["dismissed 1"]}'),
+    zh_user=("知识点: [%(kp_name)s]\n"
+             "当前概念: %(kp_concept)s\n"
+             "当前细节: %(kp_detail)s\n\n"
+             "挑战:\n%(issues_text)s\n\n"
+             "支撑QA:\n%(qa_texts)s\n"
+             "对每个挑战: 修订KP或解释为何无效。返回修订后的概念和细节。\n"
+             '返回 JSON: {"revised_concept": "...", "revised_detail": "...", '
+             '"changes_made": ["修改1"], "challenges_dismissed": ["驳回1"]}'),
+)
 
-FRAGMENT = _FRAGMENT_TMPL
-QA_CLASSIFY = _KP_CLASSIFY_TMPL
-QUERY_ANALYST = _QUERY_ANALYSIS_TMPL
-CRITIC = _CRITIC_TMPL
-SUGGEST = _SUGGEST_TMPL
-VERB_PATTERN_SUMMARY = _VERB_PATTERN_TMPL
-DIFFICULTY_RATE = _DIFFICULTY_TMPL
-DEPENDENCY_VALIDATE = _DEPENDENCY_TMPL
+_KP_CONSISTENCY_TMPL = PromptTemplate(
+    en_system="Check these knowledge points for cross-KP consistency issues. Output JSON.",
+    zh_system="检查这些知识点之间的跨KP一致性问题。Output JSON。",
+    en_user=("%(kp_texts)s\n\n"
+             "Check: duplicates, contradictions, merges, dependency direction.\n"
+             'Return JSON: {"issues": '
+             '[{"kp_a":"id1","kp_b":"id2","issue":"...","suggestion":"...","action":"merge|split|no_change"}]}'),
+    zh_user=("%(kp_texts)s\n\n"
+             "检查: 重复/矛盾/应合并/依赖方向不一致。\n"
+             '返回 JSON: {"issues": '
+             '[{"kp_a":"id1","kp_b":"id2","issue":"...","suggestion":"...","action":"merge|split|no_change"}]}'),
+)
+
+_KP_SPLIT_TMPL = PromptTemplate(
+    en_system="Decide whether this KP should be split into two. Output JSON.",
+    zh_system="判断此KP是否应拆分为两个。Output JSON。",
+    en_user=("Knowledge Point: [%(kp_name)s]\n"
+             "Concept: %(kp_concept)s\n"
+             "Detail: %(kp_detail)s\n\n"
+             "Member QAs:\n%(qa_texts)s\n\n"
+             "Should this KP be split? If yes, assign each QA to kp_a or kp_b.\n"
+             'Return JSON: {"split": true/false, '
+             '"kp_a": {"concept": "...", "qa_ids": %(ex_a)s}, '
+             '"kp_b": {"concept": "...", "qa_ids": %(ex_b)s}}'),
+    zh_user=("知识点: [%(kp_name)s]\n"
+             "概念: %(kp_concept)s\n"
+             "细节: %(kp_detail)s\n\n"
+             "成员QA:\n%(qa_texts)s\n\n"
+             "此KP是否应拆分？如果是，将每个QA分配到kp_a或kp_b。\n"
+             '返回 JSON: {"split": true/false, '
+             '"kp_a": {"concept": "...", "qa_ids": %(ex_a)s}, '
+             '"kp_b": {"concept": "...", "qa_ids": %(ex_b)s}}'),
+)
 
 
 # ============================================================
@@ -412,6 +488,14 @@ class PromptBuilder:
                 return PromptBuilder._build_difficulty(kwargs)
             case PromptType.DEPENDENCY:
                 return PromptBuilder._build_dependency(kwargs)
+            case PromptType.KP_CHALLENGER:
+                return PromptBuilder._build_kp_challenger(kwargs)
+            case PromptType.KP_DEFENDER:
+                return PromptBuilder._build_kp_defender(kwargs)
+            case PromptType.KP_CONSISTENCY:
+                return PromptBuilder._build_kp_consistency(kwargs)
+            case PromptType.KP_SPLIT:
+                return PromptBuilder._build_kp_split(kwargs)
             case _:
                 raise ValueError(f"Unknown PromptType: {prompt_type}")
 
@@ -634,6 +718,60 @@ class PromptBuilder:
         pairs_block = kw.get("pairs_block", "")
         lang = kw.get("lang", "en")
         return _DEPENDENCY_TMPL.build(lang=lang, pairs_block=pairs_block)
+
+    # ── KP_CHALLENGER ─────────────────────────────────────────
+
+    @staticmethod
+    def _build_kp_challenger(kw: dict) -> list[dict]:
+        qa_texts = kw.get("qa_texts", "")
+        lang = kw.get("lang", "") or detect_content_lang(qa_texts)
+        return _KP_CHALLENGER_TMPL.build(
+            lang=lang,
+            kp_name=kw.get("kp_name", ""),
+            kp_concept=kw.get("kp_concept", ""),
+            kp_detail=kw.get("kp_detail", ""),
+            qa_texts=qa_texts,
+            prev_challenges=kw.get("prev_challenges", ""),
+        )
+
+    # ── KP_DEFENDER ───────────────────────────────────────────
+
+    @staticmethod
+    def _build_kp_defender(kw: dict) -> list[dict]:
+        qa_texts = kw.get("qa_texts", "")
+        lang = kw.get("lang", "") or detect_content_lang(qa_texts)
+        return _KP_DEFENDER_TMPL.build(
+            lang=lang,
+            kp_name=kw.get("kp_name", ""),
+            kp_concept=kw.get("kp_concept", ""),
+            kp_detail=kw.get("kp_detail", ""),
+            issues_text=kw.get("issues_text", ""),
+            qa_texts=qa_texts,
+        )
+
+    # ── KP_CONSISTENCY ────────────────────────────────────────
+
+    @staticmethod
+    def _build_kp_consistency(kw: dict) -> list[dict]:
+        kp_texts = kw.get("kp_texts", "")
+        lang = kw.get("lang", "") or detect_content_lang(kp_texts)
+        return _KP_CONSISTENCY_TMPL.build(lang=lang, kp_texts=kp_texts)
+
+    # ── KP_SPLIT ──────────────────────────────────────────────
+
+    @staticmethod
+    def _build_kp_split(kw: dict) -> list[dict]:
+        qa_texts = kw.get("qa_texts", "")
+        lang = kw.get("lang", "") or detect_content_lang(qa_texts)
+        return _KP_SPLIT_TMPL.build(
+            lang=lang,
+            kp_name=kw.get("kp_name", ""),
+            kp_concept=kw.get("kp_concept", ""),
+            kp_detail=kw.get("kp_detail", ""),
+            qa_texts=qa_texts,
+            ex_a=kw.get("ex_a", "[]"),
+            ex_b=kw.get("ex_b", "[]"),
+        )
 
 
 # ============================================================

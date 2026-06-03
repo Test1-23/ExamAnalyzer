@@ -20,85 +20,8 @@ from .logger import get_logger
 _log = get_logger()
 
 from .constants import MAX_ROUNDS, PASS_THRESHOLD
+from .prompt_factory import PromptType, PromptBuilder
 from .utils import get_worker_limit
-
-
-def _build_challenger_prompt(kp: dict, qas: list[dict], lang: str, prev_challenges: str = ""):
-    """Build prompt for the challenger agent."""
-    qa_texts = ""
-    for i, qa in enumerate(qas[:5]):
-        qa_texts += f"QA{i+1}: Q: {qa['question_text'][:300]}\nA: {qa['answer_text'][:300]}\n\n"
-
-    if lang == 'en':
-        sys = "You are a rigorous knowledge reviewer. Find flaws in this knowledge point. Output JSON."
-        usr = (
-            f"Knowledge Point: [{kp['name']}]\n"
-            f"Concept: {kp.get('core_concept', '') or kp.get('description', '')}\n"
-            f"Detail: {kp.get('core_detail', '')}\n\n"
-            f"Supporting QAs:\n{qa_texts}\n"
-            f"{'Previous challenges (already addressed): ' + prev_challenges if prev_challenges else ''}"
-            "Find issues:\n"
-            "1. Does the concept statement match ALL supporting QAs? (over-generalization?)\n"
-            "2. Is any important nuance from the QAs missing in the concept/detail?\n"
-            "3. Are there edge cases the KP doesn't cover?\n"
-            "4. Could this KP be split into two separate concepts?\n\n"
-            "If you find NO issues, return PASS. Otherwise list specific problems.\n"
-            'Return JSON: {"pass": true/false, "issues": ["issue 1", "issue 2"], '
-            '"severity": "critical|minor|cosmetic"}'
-        )
-    else:
-        sys = "你是一个严谨的知识审核专家。找出知识点的缺陷。Output JSON。"
-        usr = (
-            f"知识点: [{kp['name']}]\n"
-            f"概念: {kp.get('core_concept', '') or kp.get('description', '')}\n"
-            f"细节: {kp.get('core_detail', '')}\n\n"
-            f"支撑QA:\n{qa_texts}\n"
-            f"{'已处理的挑战: ' + prev_challenges if prev_challenges else ''}"
-            "找出问题:\n"
-            "1. 概念陈述是否与所有支撑QA一致？\n"
-            "2. 是否遗漏了QA中的重要细节？\n"
-            "3. 是否有边缘情况未覆盖？\n"
-            "4. 这个KP是否应拆分为两个独立概念？\n\n"
-            "如无问题返回PASS，否则列出具体问题。\n"
-            '返回 JSON: {"pass": true/false, "issues": ["问题1"], "severity": "critical|minor|cosmetic"}'
-        )
-    return [{"role": "system", "content": sys}, {"role": "user", "content": usr}]
-
-
-def _build_defender_prompt(kp: dict, issues: list[str], qas: list[dict], lang: str):
-    """Build prompt for the defender agent."""
-    qa_texts = ""
-    for i, qa in enumerate(qas[:5]):
-        qa_texts += f"QA{i+1}: Q: {qa['question_text'][:300]}\nA: {qa['answer_text'][:300]}\n\n"
-
-    issues_text = "\n".join(f"- {i}" for i in issues)
-
-    if lang == 'en':
-        sys = "You are a knowledge curator. Defend or revise this knowledge point against challenges. Output JSON."
-        usr = (
-            f"Knowledge Point: [{kp['name']}]\n"
-            f"Current concept: {kp.get('core_concept', '') or kp.get('description', '')}\n"
-            f"Current detail: {kp.get('core_detail', '')}\n\n"
-            f"Challenges:\n{issues_text}\n\n"
-            f"Supporting QAs:\n{qa_texts}\n"
-            "For each challenge: either revise the KP to address it, or explain why it's invalid.\n"
-            "Return the revised concept and detail.\n"
-            'Return JSON: {"revised_concept": "...", "revised_detail": "...", '
-            '"changes_made": ["change 1"], "challenges_dismissed": ["dismissed 1"]}'
-        )
-    else:
-        sys = "你是一个知识策展人。针对挑战为知识点辩护或修订。Output JSON。"
-        usr = (
-            f"知识点: [{kp['name']}]\n"
-            f"当前概念: {kp.get('core_concept', '') or kp.get('description', '')}\n"
-            f"当前细节: {kp.get('core_detail', '')}\n\n"
-            f"挑战:\n{issues_text}\n\n"
-            f"支撑QA:\n{qa_texts}\n"
-            "对每个挑战: 修订KP或解释为何无效。返回修订后的概念和细节。\n"
-            '返回 JSON: {"revised_concept": "...", "revised_detail": "...", '
-            '"changes_made": ["修改1"], "challenges_dismissed": ["驳回1"]}'
-        )
-    return [{"role": "system", "content": sys}, {"role": "user", "content": usr}]
 
 
 def refine_kp(db: QADatabase, kp_id: str, client, debug=None) -> dict:
@@ -125,8 +48,21 @@ def refine_kp(db: QADatabase, kp_id: str, client, debug=None) -> dict:
     for round_num in range(1, MAX_ROUNDS + 1):
         total_rounds = round_num
 
-        # Challenger
-        chal_msgs = _build_challenger_prompt(kp, qas, lang, prev_issues)
+        # Challenger — pre-compute QA text block
+        qa_block = ""
+        for i, qa in enumerate(qas[:5]):
+            qa_block += f"QA{i+1}: Q: {qa['question_text'][:300]}\nA: {qa['answer_text'][:300]}\n\n"
+        prev_block = f"Previous challenges (already addressed): {prev_issues}\n" if prev_issues else ""
+        if lang != 'en':
+            prev_block = f"已处理的挑战: {prev_issues}\n" if prev_issues else ""
+        chal_msgs = PromptBuilder.build(PromptType.KP_CHALLENGER,
+            kp_name=kp.get("name", ""),
+            kp_concept=kp.get("core_concept", "") or kp.get("description", ""),
+            kp_detail=kp.get("core_detail", ""),
+            qa_texts=qa_block,
+            prev_challenges=prev_block,
+            lang=lang,
+        )
         try:
             chal_result, _ = call_flash(client, chal_msgs, max_retries=1, debug=debug)
             chal_result = chal_result if isinstance(chal_result, dict) else {}
@@ -147,8 +83,19 @@ def refine_kp(db: QADatabase, kp_id: str, client, debug=None) -> dict:
         severity = chal_result.get("severity", "minor")
         history.append({"round": round_num, "role": "challenger", "pass": False, "issues": issues, "severity": severity})
 
-        # Defender
-        def_msgs = _build_defender_prompt(kp, issues, qas, lang)
+        # Defender — pre-compute QA text block and issues text
+        qa_block = ""
+        for i, qa in enumerate(qas[:5]):
+            qa_block += f"QA{i+1}: Q: {qa['question_text'][:300]}\nA: {qa['answer_text'][:300]}\n\n"
+        issues_text = "\n".join(f"- {i}" for i in issues)
+        def_msgs = PromptBuilder.build(PromptType.KP_DEFENDER,
+            kp_name=kp.get("name", ""),
+            kp_concept=kp.get("core_concept", "") or kp.get("description", ""),
+            kp_detail=kp.get("core_detail", ""),
+            issues_text=issues_text,
+            qa_texts=qa_block,
+            lang=lang,
+        )
         try:
             def_result, _ = call_flash(client, def_msgs, max_retries=1, debug=debug)
             def_result = def_result if isinstance(def_result, dict) else {}
@@ -240,16 +187,8 @@ def cross_kp_consistency(db: QADatabase, kp_ids: list[str], client, debug=None) 
         for k in kps:
             kp_texts += f"[{k['id']}] {k['name']}: {k.get('core_concept', '') or k.get('description', '')}\n"
 
-        if lang == 'en':
-            sys = "Check these knowledge points for cross-KP consistency issues. Output JSON."
-            usr = f"{kp_texts}\nCheck: duplicates, contradictions, merges, dependency direction.\n" \
-                  'Return: {"issues": [{"kp_a":"id1","kp_b":"id2","issue":"...","suggestion":"...","action":"merge|split|no_change"}]}'
-        else:
-            sys = "检查这些知识点之间的跨KP一致性问题。Output JSON。"
-            usr = f"{kp_texts}\n检查: 重复/矛盾/应合并/依赖方向不一致\n" \
-                  '返回: {"issues": [{"kp_a":"id1","kp_b":"id2","issue":"...","suggestion":"...","action":"merge|split|no_change"}]}'
-
-        messages = [{"role": "system", "content": sys}, {"role": "user", "content": usr}]
+        messages = PromptBuilder.build(PromptType.KP_CONSISTENCY,
+            kp_texts=kp_texts, lang=lang)
         try:
             result, _ = call_flash(client, messages, max_retries=1, debug=debug)
             return result.get("issues", []) if isinstance(result, dict) else []
@@ -322,26 +261,15 @@ def auto_split_kp(db: QADatabase, kp_id: str, client, debug=None) -> list[str]:
     ex_a_json = json.dumps([example_ids[0]])
     ex_b_json = json.dumps([example_ids[-1] if len(example_ids) >= 2 else example_ids[0]])
 
-    if lang == 'en':
-        sys = "Decide whether this KP should be split into two. Output JSON."
-        usr = (
-            f"KP: [{kp['name']}] — {kp.get('core_concept', '') or kp.get('description', '')}\n\n"
-            f"Member QAs:\n{qa_texts}\n"
-            "Should this KP be split? If yes, provide two sub-concepts and assign each QA to one.\n"
-            f'Return: {{"split": true/false, "kp_a": {{"concept": "...", "qa_ids": {ex_a_json}}}, '
-            f'"kp_b": {{"concept": "...", "qa_ids": {ex_b_json}}}}}'
-        )
-    else:
-        sys = "判断此KP是否应拆分为两个。Output JSON。"
-        usr = (
-            f"KP: [{kp['name']}] — {kp.get('core_concept', '') or kp.get('description', '')}\n\n"
-            f"成员QA:\n{qa_texts}\n"
-            "此KP是否应拆分？若是，提供两个子概念并分配QA。\n"
-            f'返回: {{"split": true/false, "kp_a": {{"concept": "...", "qa_ids": {ex_a_json}}}, '
-            f'"kp_b": {{"concept": "...", "qa_ids": {ex_b_json}}}}}'
-        )
-
-    messages = [{"role": "system", "content": sys}, {"role": "user", "content": usr}]
+    messages = PromptBuilder.build(PromptType.KP_SPLIT,
+        kp_name=kp.get("name", ""),
+        kp_concept=kp.get("core_concept", "") or kp.get("description", ""),
+        kp_detail=kp.get("core_detail", ""),
+        qa_texts=qa_texts,
+        ex_a=ex_a_json,
+        ex_b=ex_b_json,
+        lang=lang,
+    )
     try:
         result, _ = call_flash(client, messages, max_retries=1, debug=debug)
     except Exception as e:

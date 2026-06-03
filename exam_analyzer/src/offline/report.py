@@ -7,7 +7,7 @@ from ..deepseek_client import create_client, call_flash
 from ..knowledge_base import QADatabase
 from ..embedding_cluster import _get_model, detect_content_lang, TOPIC_EMBED_MODEL
 from ..models import VerbPatternSpec, DependencySpec
-from ..prompt_factory import VERB_PATTERN_SUMMARY, DIFFICULTY_RATE, DEPENDENCY_VALIDATE
+
 from ..logger import get_logger
 from ..utils import get_worker_limit
 

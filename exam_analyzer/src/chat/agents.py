@@ -5,7 +5,7 @@ from typing import Any
 
 from ..deepseek_client import call_flash
 from ..logger import get_logger
-from ..prompt_factory import QUERY_ANALYST, CRITIC, SUGGEST, build_answer_generator_messages
+from ..prompt_factory import PromptType, PromptBuilder, build_answer_generator_messages
 
 _log = get_logger()
 
@@ -14,7 +14,7 @@ _log = get_logger()
 
 def agent_query_analyst(question: str, lang: str, client: Any) -> dict[str, Any]:
     """Analyze question: rephrase for retrieval, classify type, extract command verb."""
-    msgs = QUERY_ANALYST.build(lang=lang, question=question)
+    msgs = PromptBuilder.build(PromptType.QUERY_ANALYSIS, lang=lang, question=question)
     try:
         result, _ = call_flash(client, msgs, max_retries=1)
         return result if isinstance(result, dict) else {"keywords": [], "qtype": "explanation", "verb": ""}
@@ -47,7 +47,7 @@ def agent_critic(question: str, answer: str, similar: list[dict[str, Any]], lang
     for i, qa in enumerate(similar[:3], 1):
         ctx += f"Q{i}: {qa['question_text']}\nA: {qa['answer_text']}\n\n"
 
-    msgs = CRITIC.build(lang=lang, question=question, ctx=ctx, answer=answer)
+    msgs = PromptBuilder.build(PromptType.CRITIC, lang=lang, question=question, ctx=ctx, answer=answer)
     try:
         result, _ = call_flash(client, msgs, max_retries=1)
         return result if isinstance(result, dict) else {"pass": True, "feedback": ""}
@@ -81,7 +81,7 @@ def agent_suggest(question: str, answer: str, similar: list[dict[str, Any]], lan
             from .error_utils import log_exception
             log_exception(_log, "Suggest prerequisites", "", e, level="warning")
 
-    msgs = SUGGEST.build(lang=lang, question=question, topic_str=topic_str, prereq_hint=prereq_hint)
+    msgs = PromptBuilder.build(PromptType.SUGGEST, lang=lang, question=question, topic_str=topic_str, prereq_hint=prereq_hint)
     try:
         result, _ = call_flash(client, msgs, max_retries=1)
         return result.get("suggestions", []) if isinstance(result, dict) else []
