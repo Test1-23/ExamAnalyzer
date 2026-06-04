@@ -140,3 +140,7 @@ class TopicStore:
         if topic:
             return self._qb.get_where("topic_difficulty", topic=topic)
         return self._qb.get_all("topic_difficulty", order_by="mode_difficulty, topic")
+
+    def get_by_quality(self, quality: str) -> list[dict]:
+        """Return all dynamic_topics with the given quality value."""
+        return self._qb.get_where("dynamic_topics", quality=quality)

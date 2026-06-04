@@ -8,7 +8,7 @@ import numpy as np
 from .adversarial_refiner import refine_kp
 from .deepseek_client import call_flash
 from .embedding_cluster import detect_content_lang, _get_model, TOPIC_EMBED_MODEL
-from .constants import SQLITE_PARAM_CHUNK
+
 from .knowledge_base import QADatabase
 from .diagnostics import run_phase2_cycle, apply_student_feedback
 
@@ -32,7 +32,7 @@ def run_evolution_cycle(db: QADatabase, client, debug) -> None:
         from .error_utils import log_exception
         log_exception(debug, "KP generation", "stable_topics", e)
 
-    kps = db.conn.execute("SELECT * FROM knowledge_points").fetchall()
+    kps = db.kp.get_all()
     if not kps:
         return
 
@@ -113,9 +113,7 @@ def run_evolution_cycle(db: QADatabase, client, debug) -> None:
 
 def _generate_kp_for_stable_topics(db: QADatabase, client, debug) -> None:
     """Generate KP text for topics that reached 'forming' quality via Flash."""
-    topics = db.conn.execute(
-        "SELECT * FROM dynamic_topics WHERE quality='forming'"
-    ).fetchall()
+    topics = db.topic.get_by_quality("forming")
     if not topics:
         return
 
@@ -128,13 +126,7 @@ def _generate_kp_for_stable_topics(db: QADatabase, client, debug) -> None:
         if not frags:
             continue
 
-        capped = frags[:SQLITE_PARAM_CHUNK]
-        frag_texts = db.conn.execute(
-            "SELECT point_text FROM ms_fragments WHERE point_id IN (%s)" % (
-                ",".join("?" * len(capped))),
-            capped
-        ).fetchall()
-        texts = [r["point_text"] for r in frag_texts]
+        texts = db.fragment.get_texts_by_ids(frags)
         combined = "\n".join(f"- {t}" for t in texts[:20])
 
         lang = detect_content_lang(combined[:2000])

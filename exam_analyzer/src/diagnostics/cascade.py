@@ -35,7 +35,7 @@ def _detect_topic_splits(db: QADatabase, debug=None) -> int:
             continue
 
         # Batch-load all fragment help data for this topic (chunked for SQLite 999-param limit)
-        from .constants import SQLITE_PARAM_CHUNK
+        from ..constants import SQLITE_PARAM_CHUNK
         frag_helps = {}
         for i in range(0, len(frags), SQLITE_PARAM_CHUNK):
             chunk = frags[i:i + SQLITE_PARAM_CHUNK]

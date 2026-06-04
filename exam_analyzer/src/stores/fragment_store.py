@@ -124,3 +124,16 @@ class FragmentStore:
             (topic_id,),
         ).fetchall()
         return {r["helped_qa_id"] for r in rows}
+
+    def get_texts_by_ids(self, point_ids: list[str]) -> list[str]:
+        """Return point_text values for the given fragment point_ids."""
+        if not point_ids:
+            return []
+        from ..constants import SQLITE_PARAM_CHUNK
+        capped = point_ids[:SQLITE_PARAM_CHUNK]
+        ph = ",".join("?" * len(capped))
+        rows = self._qb.conn.execute(
+            "SELECT point_text FROM ms_fragments WHERE point_id IN (%s)" % ph,
+            capped,
+        ).fetchall()
+        return [r["point_text"] for r in rows]

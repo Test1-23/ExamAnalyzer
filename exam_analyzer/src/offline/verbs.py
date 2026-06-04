@@ -214,7 +214,7 @@ def _compute_verb_stats(verb_groups, db):
         miss_rates = []
         qa_ids = [qa["id"] for qa in qas]
         if qa_ids:
-            from .constants import SQLITE_PARAM_CHUNK
+            from ..constants import SQLITE_PARAM_CHUNK
             for i in range(0, len(qa_ids), SQLITE_PARAM_CHUNK):
                 chunk = qa_ids[i:i + SQLITE_PARAM_CHUNK]
                 placeholders = ",".join("?" * len(chunk))

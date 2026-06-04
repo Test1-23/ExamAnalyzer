@@ -261,6 +261,55 @@ _QUERY_ANALYSIS_TMPL = PromptTemplate(
              '"verb": "explain", "topic": "主题名称"}'),
 )
 
+_ANSWER_GEN_TMPL = PromptTemplate(
+    en_system=(
+        "You are a knowledgeable and patient tutor. "
+        "Use the provided Q&A and knowledge points as reference. "
+        "CRITICAL: NEVER translate Q&A or KP content — quote it verbatim. "
+        "Technical terms stay in original language. "
+        "Your explanation may be in the student's language. "
+        "Mark each claim: prefix with [KB] if from provided references, [General] if from your own knowledge. "
+        "Output JSON."
+    ),
+    zh_system=(
+        "你是一个知识渊博且耐心的导师。"
+        "使用提供的问答和知识点作为参考。"
+        "关键规则：绝对不要翻译Q&A或KP内容——逐字引用。"
+        "技术术语保持原文。你的解释可以使用中文。"
+        "标记每个论断：[KB]=来自参考资料，[General]=来自你自己的知识。"
+        "Output JSON。"
+    ),
+    en_user=(
+        "%(ctx)s\n%(ctx_kp)s\n"
+        "Student question: %(question)s\n\n"
+        "Question type: %(qtype)s\n"
+        "Style guide: %(guide)s\n\n"
+        "Answer in English. Mark each claim with [KB] or [General].\n"
+        "Also include:\n"
+        "- A 1-question diagnostic quiz to check the student's understanding "
+        "(with expected short answer, max 1 sentence)\n"
+        "- A learning path hint: what related topic the student should explore next, and why\n"
+        'Return JSON: {"answer": "your answer", '
+        '"quiz": {"question": "...", "expected": "..."}, '
+        '"path_hint": {"next_topic": "...", "reason": "..."}}'
+    ),
+    zh_user=(
+        "%(ctx)s\n%(ctx_kp)s\n"
+        "学生问题: %(question)s\n\n"
+        "问题类型: %(qtype)s\n"
+        "回答风格: %(guide)s\n\n"
+        "请用中文回答。标记每个论断: [KB]=来自参考资料, [General]=来自你自己。\n"
+        "【关键规则】Q&A和KP内容是英文原文——必须逐字引用，绝对不要翻译成中文。\n"
+        "技术术语保持英文原文。只有解释和评论部分使用中文。\n"
+        "同时包含:\n"
+        "- 一道诊断性小测题（检查学生是否理解，附带期望的简短答案）\n"
+        "- 学习路径提示: 学生接下来应探索什么相关主题，为什么\n"
+        '返回 JSON: {"answer": "你的回答", '
+        '"quiz": {"question": "...", "expected": "..."}, '
+        '"path_hint": {"next_topic": "...", "reason": "..."}}'
+    ),
+)
+
 _CRITIC_TMPL = PromptTemplate(
     en_system="Review this tutoring answer for quality. Output JSON.",
     zh_system="审查此教学回答的质量。Output JSON。",
@@ -612,53 +661,16 @@ class PromptBuilder:
         }
         guide = type_guide.get(qtype, type_guide["explanation"])
 
-        sys = (
-            "You are a knowledgeable and patient tutor. "
-            "Use the provided Q&A and knowledge points as reference. "
-            "CRITICAL: NEVER translate Q&A or KP content — quote it verbatim. "
-            "Technical terms stay in original language. "
-            "Your explanation may be in the student's language. "
-            "Mark each claim: prefix with [KB] if from provided references, [General] if from your own knowledge. "
-            "Output JSON."
+        base = _ANSWER_GEN_TMPL.build(
+            lang=lang, ctx=ctx, ctx_kp=ctx_kp,
+            question=question, qtype=qtype, guide=guide,
         )
-
-        if lang == "zh":
-            usr = (
-                f"{ctx}\n{ctx_kp}\n"
-                f"学生问题: {question}\n\n"
-                f"问题类型: {qtype}\n"
-                f"回答风格: {guide}\n\n"
-                "请用中文回答。标记每个论断: [KB]=来自参考资料, [General]=来自你自己。\n"
-                "【关键规则】Q&A和KP内容是英文原文——必须逐字引用，绝对不要翻译成中文。\n"
-                "技术术语保持英文原文。只有解释和评论部分使用中文。\n"
-                "同时包含:\n"
-                "- 一道诊断性小测题（检查学生是否理解，附带期望的简短答案）\n"
-                "- 学习路径提示: 学生接下来应探索什么相关主题，为什么\n"
-                '返回 JSON: {"answer": "你的回答", '
-                '"quiz": {"question": "...", "expected": "..."}, '
-                '"path_hint": {"next_topic": "...", "reason": "..."}}'
-            )
-        else:
-            usr = (
-                f"{ctx}\n{ctx_kp}\n"
-                f"Student question: {question}\n\n"
-                f"Question type: {qtype}\n"
-                f"Style guide: {guide}\n\n"
-                "Answer in English. Mark each claim with [KB] or [General].\n"
-                "Also include:\n"
-                "- A 1-question diagnostic quiz to check the student's understanding "
-                "(with expected short answer, max 1 sentence)\n"
-                "- A learning path hint: what related topic the student should explore next, and why\n"
-                'Return JSON: {"answer": "your answer", '
-                '"quiz": {"question": "...", "expected": "..."}, '
-                '"path_hint": {"next_topic": "...", "reason": "..."}}'
-            )
-
-        msgs: list[dict] = [{"role": "system", "content": sys}]
+        # base is [system, user]; inject history between them
+        msgs: list[dict] = [base[0]]
         for h in history[-6:]:
             role = "assistant" if h.get("role") == "assistant" else "user"
             msgs.append({"role": role, "content": h.get("content", "")})
-        msgs.append({"role": "user", "content": usr})
+        msgs.append(base[1])
         return msgs
 
     # ── CRITIC ───────────────────────────────────────────────
