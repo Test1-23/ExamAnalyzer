@@ -68,7 +68,7 @@ def discover_dependencies(db: QADatabase, client, debug, progress_cb=None) -> li
         ).fetchone()
         # count unique nodes from both columns
         nodes = set()
-        for r in db.conn.execute("SELECT prerequisite, dependent FROM topic_dependencies").fetchall():
+        for r in db.analysis.get_dependencies():
             nodes.add(r["prerequisite"]); nodes.add(r["dependent"])
         edge_count = sum(conf_map.values())
         from ..error_utils import log_info

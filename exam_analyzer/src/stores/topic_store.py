@@ -145,6 +145,15 @@ class TopicStore:
         """Return all dynamic_topics with the given quality value."""
         return self._qb.get_where("dynamic_topics", quality=quality)
 
+    def get_by_qualities(self, qualities: list[str]) -> list[dict]:
+        """Return dynamic_topics matching any quality in *qualities*."""
+        if not qualities:
+            return []
+        ph = ",".join("?" * len(qualities))
+        sql = "SELECT * FROM dynamic_topics WHERE quality IN (%s)" % ph
+        rows = self._qb.conn.execute(sql, qualities).fetchall()
+        return [dict(r) for r in rows]
+
     def get_all_links(self) -> list[dict]:
         """Return all topic_links rows as dicts with src_topic, dst_topic, count."""
         return self._qb.get_all("topic_links")

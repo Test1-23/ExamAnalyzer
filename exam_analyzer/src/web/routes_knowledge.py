@@ -104,11 +104,7 @@ def knowledge_graph():
             edges.append({"source": topic, "target": dep_name, "type": "prerequisite", "confidence": "medium"})
 
     try:
-        dt_rows = db.conn.execute(
-            "SELECT topic_id, name, kp_concept, kp_detail, mass, stability, quality, "
-            "parent_topic, child_topics, merged_from "
-            "FROM dynamic_topics WHERE quality IN ('stable', 'forming')"
-        ).fetchall()
+        dt_rows = db.topic.get_by_qualities(["stable", "forming"])
         for r in dt_rows:
             nodes.append({"name": r["name"] or r["topic_id"], "qa_count": r["mass"] or 0,
                           "difficulty": "", "prerequisites": [], "dependents": [],
