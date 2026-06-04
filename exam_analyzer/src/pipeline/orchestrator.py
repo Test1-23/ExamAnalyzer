@@ -808,11 +808,11 @@ def run_pipeline(
             if not topic or topic == "(uncategorized)" or not qas:
                 continue
             best_qa = max(qas, key=lambda qa: weights.get(qa["id"], {}).get("mean", 0.5))
-            db.conn.execute("UPDATE qa_pairs SET is_representative = 1 WHERE id = ?", (best_qa["id"],))
+            db.qa.set_representative(best_qa["id"])
             for qa in qas:
                 if any(dst == topic and src != topic for (src, dst) in topic_links) or \
                    any(src == topic and dst != topic for (src, dst) in topic_links):
-                    db.conn.execute("UPDATE qa_pairs SET is_cross_topic = 1 WHERE id = ?", (qa["id"],))
+                    db.qa.set_cross_topic(qa["id"])
 
     # -- Post-processing stages --
     for label, stage_fn in [

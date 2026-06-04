@@ -98,9 +98,7 @@ def merge_similar_topics(db: QADatabase, client, debug) -> None:
         for old_topic, canonical in flat_mergers.items():
             merged_count += db.qa.rename_topic(canonical, old_topic)
 
-        all_links = db.conn.execute(
-            "SELECT src_topic, dst_topic, count FROM topic_links"
-        ).fetchall()
+        all_links = db.topic.get_all_links()
         merged = {}
         for r in all_links:
             src = flat_mergers.get(r["src_topic"], r["src_topic"])
@@ -109,13 +107,7 @@ def merge_similar_topics(db: QADatabase, client, debug) -> None:
                 continue
             key = (src, dst)
             merged[key] = merged.get(key, 0) + r["count"]
-        with db.transaction():
-            db.conn.execute("DELETE FROM topic_links")
-            for (src, dst), total in merged.items():
-                db.conn.execute(
-                    "INSERT INTO topic_links (src_topic, dst_topic, count) VALUES (?, ?, ?)",
-                    (src, dst, total),
-                )
+        db.topic.replace_all_links(list(merged.items()))
         from .error_utils import log_info
         log_info(debug, "Topic merge", f"{len(flat_mergers)} groups, {merged_count} QAs affected, "
               f"{len(all_links)} links -> {len(merged)} after merge")

@@ -235,10 +235,7 @@ def auto_split_kp(db: QADatabase, kp_id: str, client, debug=None) -> list[str]:
         return []
 
     # Get all member QAs
-    member_rows = db.conn.execute(
-        "SELECT qa_id FROM qa_kp_membership WHERE kp_id=?", (kp_id,)
-    ).fetchall()
-    all_qa_ids = [r["qa_id"] for r in member_rows]
+    all_qa_ids = db.kp.get_member_qa_ids(kp_id)
     if len(all_qa_ids) < 4:
         return []
 
@@ -359,10 +356,7 @@ def auto_merge_kps(db: QADatabase, issues: list[dict], debug=None) -> int:
 
         with db.transaction():
             # Move all QAs from B to A
-            db.conn.execute(
-                "UPDATE qa_kp_membership SET kp_id=? WHERE kp_id=?",
-                (kp_a, kp_b),
-            )
+            db.kp.move_memberships(kp_b, kp_a)
             # Re-route edges from B to A, deduplicating conflicts
             edges = db.conn.execute(
                 "SELECT source_kp, target_kp, edge_type, retrieval_weight, semantic_weight, "
@@ -387,7 +381,7 @@ def auto_merge_kps(db: QADatabase, issues: list[dict], debug=None) -> int:
                     confidence=edge["confidence"],
                 ))
             # Delete B
-            db.conn.execute("DELETE FROM knowledge_points WHERE id=?", (kp_b,))
+            db.kp.delete_kp(kp_b)
 
         db.analysis.record_evolution(
             kp_id=kp_a,

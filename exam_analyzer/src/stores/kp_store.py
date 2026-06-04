@@ -222,3 +222,29 @@ class KpStore:
                 (count, kp_id),
             )
             self._mgr.maybe_commit()
+
+    def get_member_qa_ids(self, kp_id: str) -> list[int]:
+        """Return QA IDs belonging to a KP via qa_kp_membership."""
+        rows = self._qb.conn.execute(
+            "SELECT qa_id FROM qa_kp_membership WHERE kp_id=?", (kp_id,)
+        ).fetchall()
+        return [r["qa_id"] for r in rows]
+
+    def move_memberships(self, from_kp: str, to_kp: str) -> None:
+        """Move all QA memberships from one KP to another (for KP merge)."""
+        with self._mgr._write_lock:
+            self._mgr._assert_write_locked()
+            self._qb.conn.execute(
+                "UPDATE qa_kp_membership SET kp_id=? WHERE kp_id=?",
+                (to_kp, from_kp),
+            )
+            self._mgr.maybe_commit()
+
+    def delete_kp(self, kp_id: str) -> None:
+        """Delete a knowledge_point row."""
+        with self._mgr._write_lock:
+            self._mgr._assert_write_locked()
+            self._qb.conn.execute(
+                "DELETE FROM knowledge_points WHERE id=?", (kp_id,)
+            )
+            self._mgr.maybe_commit()

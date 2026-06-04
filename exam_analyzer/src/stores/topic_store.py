@@ -144,3 +144,19 @@ class TopicStore:
     def get_by_quality(self, quality: str) -> list[dict]:
         """Return all dynamic_topics with the given quality value."""
         return self._qb.get_where("dynamic_topics", quality=quality)
+
+    def get_all_links(self) -> list[dict]:
+        """Return all topic_links rows as dicts with src_topic, dst_topic, count."""
+        return self._qb.get_all("topic_links")
+
+    def replace_all_links(self, links: list[tuple]) -> None:
+        """Atomically replace all topic_links with *links* (src, dst, count)."""
+        with self._mgr._write_lock:
+            self._mgr._assert_write_locked()
+            self._qb.conn.execute("DELETE FROM topic_links")
+            for src, dst, total in links:
+                self._qb.conn.execute(
+                    "INSERT INTO topic_links (src_topic, dst_topic, count) VALUES (?, ?, ?)",
+                    (src, dst, total),
+                )
+            self._mgr.maybe_commit()

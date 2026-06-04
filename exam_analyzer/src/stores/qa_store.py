@@ -220,3 +220,23 @@ class QaStore:
                 (reason, qa_id),
             )
             self._mgr.maybe_commit()
+
+    def set_representative(self, qa_id: int) -> None:
+        """Mark a QA as the representative of its topic."""
+        with self._mgr._write_lock:
+            self._mgr._assert_write_locked()
+            self._qb.conn.execute(
+                "UPDATE qa_pairs SET is_representative = 1 WHERE id = ?",
+                (qa_id,),
+            )
+            self._mgr.maybe_commit()
+
+    def set_cross_topic(self, qa_id: int) -> None:
+        """Mark a QA as cross-topic (referenced by or references other topics)."""
+        with self._mgr._write_lock:
+            self._mgr._assert_write_locked()
+            self._qb.conn.execute(
+                "UPDATE qa_pairs SET is_cross_topic = 1 WHERE id = ?",
+                (qa_id,),
+            )
+            self._mgr.maybe_commit()
