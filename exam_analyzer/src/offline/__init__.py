@@ -1,11 +1,9 @@
-"""Offline analysis package."""
+"""Offline analysis — backward-compatible re-export.
 
-from .verbs import analyze_command_verbs
-from .difficulty import assess_difficulty
-from .dependencies import discover_dependencies
-from .report import run_offline_analysis
+Implementation moved to ``exam_analyzer/src/analysis/``.
+"""
 
-__all__ = [
-    "analyze_command_verbs", "assess_difficulty",
-    "discover_dependencies", "run_offline_analysis",
-]
+from ..analysis import (  # noqa: F401
+    analyze_command_verbs, assess_difficulty,
+    discover_dependencies, run_offline_analysis,
+)
