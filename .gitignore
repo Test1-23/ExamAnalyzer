@@ -39,6 +39,10 @@ exam_analyzer/分析报告*.md
 # files for agents to exchange information
 AgentChatRoom/
 
+# --- event_bus ---
+event_bus/node_modules/
+event_bus/pnpm-lock.yaml
+
 # Root-level generated files
 intermediate/
 logs/

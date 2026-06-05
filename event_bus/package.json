@@ -1,0 +1,13 @@
+{
+  "name": "exam-analyzer-event-bus",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Event bus for KP lifecycle coordination between Python modules",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "ws": "^8.16.0"
+  }
+}
