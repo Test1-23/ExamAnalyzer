@@ -533,7 +533,15 @@ def run_pipeline(
     debug: Optional[Callable] = None,
     log_callback: Optional[Callable] = None,
     shutdown_event=None,
+    use_emergent: bool = False,
 ) -> PipelineResult:
+    """Run the full analysis pipeline.
+
+    Args:
+        use_emergent: If True, use ``KpSystem`` with emergent clustering
+            instead of the legacy Phase 1/2 split.  Default False for
+            backward compatibility.  (Mygo-003: emergent path)
+    """
     def _progress(pct: int, status: str):
         if progress_callback:
             progress_callback(pct, status)
@@ -608,6 +616,15 @@ def run_pipeline(
     is_first = (db.count() == 0)
     topic_links = db.topic.get_links()
 
+    # -- Emergent clustering path (Mygo-003) --
+    kp_sys = None
+    if use_emergent:
+        from ..knowledge._encoding import EmbeddingEncoder
+        from ..knowledge.system import KpSystem
+        encoder = EmbeddingEncoder()
+        kp_sys = KpSystem(db, encoder)
+        _debug("Emergent clustering enabled — unified pipeline path")
+
     tracker = ProgressTracker(len(pairs) * 70 + 10, _progress, _log)
 
     for (qp_path, ms_path, display_name) in pairs:
@@ -648,6 +665,28 @@ def run_pipeline(
         if not qa_pairs:
             from ..error_utils import log_info
             log_info(_debug, display_name, "No QA pairs found, skipping")
+            continue
+
+        # -- Mygo-003: emergent clustering path --
+        if use_emergent and kp_sys is not None:
+            from ..error_utils import log_info
+            log_info(_debug, display_name, f"Emergent: ingesting {len(qa_pairs)} QAs")
+            for qa in qa_pairs:
+                # Insert QA into DB first
+                qa_id = db.qa.insert(
+                    question_text=qa.question_text,
+                    answer_text=qa.answer_text,
+                    topic="",
+                    paper=display_name,
+                    question_number=qa.question_number,
+                    parent_question=qa.parent_question,
+                )
+                # Assign to KP via emergent clustering
+                qa_text = f"{qa.question_text} {qa.answer_text}"
+                kp_sys.ingest_qa(qa_id, qa_text)
+            kp_sys.on_paper_completed(display_name, len(qa_pairs))
+            from ..error_utils import log_info
+            log_info(_debug, display_name, f"Emergent: {len(qa_pairs)} QAs ingested")
             continue
 
         if is_first:
