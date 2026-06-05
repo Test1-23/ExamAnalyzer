@@ -1,15 +1,34 @@
-"""Bilingual prompt factory — unified PromptBuilder entry point.
+"""Bilingual prompt factory — unified PromptBuilder entry point (802 lines, 17 prompt types).
 
 Uses ``%``-formatting (NOT ``str.format``) because exam text (mark schemes,
 code snippets) frequently contains literal ``{`` ``}`` that would crash
-``.format()``.  All string values are auto-escaped via ``_escape_pct`` so
-that ``%`` characters in user content are safe.
+``.format()``.  All string values are auto-escaped via ``_escape_pct``.
 
 Architecture::
 
     PromptBuilder.build(PromptType.QA_PAIRING, qp_text=..., ms_text=..., ...)
       └─ _build_qa_pairing(kwargs)
            └─ _QA_PAIRING_TMPL.build(lang=..., ...)
+
+File structure (alphabetical by PromptType)::
+
+    L20-30   : _escape_pct utility
+    L38-75   : PromptTemplate class
+    L83-101  : PromptType enum (17 members)
+    L108-489 : Template instances
+      ├─ _ANSWER_TMPL          L162  │ ├─ _KP_CHALLENGER_TMPL   L405
+      ├─ _ANSWER_GEN_TMPL      L264  │ ├─ _KP_CLASSIFY_TMPL     L227
+      ├─ _CRITIC_TMPL          L313  │ ├─ _KP_CONSISTENCY_TMPL  L457
+      ├─ _DEPENDENCY_TMPL      L393  │ ├─ _KP_DEFENDER_TMPL     L435
+      ├─ _DIFFICULTY_TMPL      L373  │ ├─ _KP_SPLIT_TMPL        L470
+      ├─ _FRAGMENT_TMPL        L212  │ ├─ _QA_PAIRING_TMPL      L108
+      ├─ _GRADE_TMPL           L177  │ ├─ _QUERY_ANALYSIS_TMPL  L245
+      │                              │ ├─ _SUGGEST_TMPL         L336
+      │                              │ ├─ _SUMMARY_TMPL         L143
+      │                              │ └─ _VERB_PATTERN_TMPL    L355
+    L496-549 : PromptBuilder.build() — match/case dispatch
+    L553-786 : PromptBuilder._build_*() methods (one per PromptType)
+    L793-802 : build_answer_generator_messages() backward-compat wrapper
 
 Callers import PromptType + PromptBuilder.  Template instances are private.
 """
