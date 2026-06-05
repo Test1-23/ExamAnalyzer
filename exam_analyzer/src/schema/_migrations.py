@@ -20,4 +20,8 @@ SCHEMA_MIGRATIONS: list[tuple[int, str, list[str]]] = [
     (3, "Phase 5: fragment_help_map help_level + vector infrastructure", [
         "ALTER TABLE fragment_help_map ADD COLUMN help_level TEXT DEFAULT ''",
     ]),
+    (4, "SAE integration: feature_activations + encoder_version columns", [
+        "ALTER TABLE kp_vectors ADD COLUMN feature_activations BLOB",
+        "ALTER TABLE qa_kp_scores ADD COLUMN encoder_version TEXT DEFAULT 'embedding'",
+    ]),
 ]

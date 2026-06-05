@@ -49,6 +49,7 @@ KP_TABLES: list[tuple[str, str]] = [
         CREATE TABLE IF NOT EXISTS kp_vectors (
             kp_id TEXT PRIMARY KEY REFERENCES knowledge_points(id),
             vector BLOB NOT NULL,
+            feature_activations BLOB,
             adjustment_count INTEGER DEFAULT 0,
             stability REAL DEFAULT 1.0,
             updated_at TEXT DEFAULT (datetime('now'))
@@ -59,6 +60,7 @@ KP_TABLES: list[tuple[str, str]] = [
             qa_id INTEGER REFERENCES qa_pairs(id),
             kp_id TEXT REFERENCES knowledge_points(id),
             relevance_score REAL NOT NULL,
+            encoder_version TEXT DEFAULT 'embedding',
             created_at TEXT DEFAULT (datetime('now')),
             PRIMARY KEY (qa_id, kp_id)
         );
