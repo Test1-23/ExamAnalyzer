@@ -42,4 +42,6 @@ AgentChatRoom/
 # Root-level generated files
 intermediate/
 logs/
+docs/
+.understand-anything/
 
