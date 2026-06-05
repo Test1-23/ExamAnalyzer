@@ -2,14 +2,11 @@
 
 from typing import Optional
 from ..constants import SQLITE_PARAM_CHUNK
+from .base import BaseStore
 
 
-class QaStore:
+class QaStore(BaseStore):
     """CRUD operations for the ``qa_pairs`` table."""
-
-    def __init__(self, qb: "QueryBuilder"):
-        self._qb = qb
-        self._mgr = qb._mgr
 
     # ------------------------------------------------------------------
     # Read
@@ -28,11 +25,11 @@ class QaStore:
         for i in range(0, len(ids), SQLITE_PARAM_CHUNK):
             chunk = ids[i:i + SQLITE_PARAM_CHUNK]
             placeholders = ",".join("?" * len(chunk))
-            rows = self._qb.conn.execute(
+            rows = self._read_all(
                 "SELECT * FROM qa_pairs WHERE id IN (%s)" % placeholders, chunk
-            ).fetchall()
+            )
             for r in rows:
-                row_map[r["id"]] = dict(r)
+                row_map[r["id"]] = r
         return [row_map[i] for i in ids if i in row_map]
 
     def get_by_topic(self, topic: str, difficulty: str = "",
@@ -44,7 +41,7 @@ class QaStore:
                % (extra, order_by))
         if limit:
             sql += " LIMIT %d" % limit
-        return [dict(r) for r in self._qb.conn.execute(sql, params).fetchall()]
+        return self._read_all(sql, params)
 
     def get_topic_groups(self) -> dict[str, list[dict]]:
         from collections import defaultdict
@@ -55,10 +52,10 @@ class QaStore:
         return dict(groups)
 
     def get_topic_answer_texts(self) -> dict[str, str]:
-        rows = self._qb.conn.execute(
+        rows = self._read_all(
             "SELECT topic, answer_text FROM qa_pairs "
             "WHERE topic != '' AND topic != '(uncategorized)'"
-        ).fetchall()
+        )
         texts: dict[str, list[str]] = {}
         for r in rows:
             texts.setdefault(r["topic"], []).append(r["answer_text"])
@@ -68,9 +65,9 @@ class QaStore:
         return self._qb.count("qa_pairs")
 
     def get_all_weights(self) -> dict[int, dict]:
-        rows = self._qb.conn.execute(
+        rows = self._read_all(
             "SELECT id, success_count, total_attempts FROM qa_pairs"
-        ).fetchall()
+        )
         result = {}
         for r in rows:
             s, t = r["success_count"], r["total_attempts"]
@@ -79,7 +76,6 @@ class QaStore:
                 a, b = s + 1, t - s + 1
                 n_post = a + b
                 p_hat = a / n_post
-                # Wilson 区间 z 值: 1.282=90% 单侧置信下界, ↑更保守的下界
                 z = 1.282
                 z2 = z * z
                 denom = 1.0 + z2 / n_post
@@ -93,10 +89,10 @@ class QaStore:
 
     def get_effective_miss_rate(self, qa_id: int) -> Optional[float]:
         import json
-        row = self._qb.conn.execute(
+        row = self._read_one(
             "SELECT covered_count, missed_count, miss_categories "
             "FROM question_feedback WHERE qa_id = ?", (qa_id,)
-        ).fetchone()
+        )
         if not row:
             return None
         total = row["covered_count"] + row["missed_count"]
@@ -120,15 +116,14 @@ class QaStore:
                topic: str = "", paper: str = "",
                question_number: str = "", parent_question: str = "",
                knowledge_summary: str = "") -> int:
-        with self._mgr._write_lock:
-            self._mgr._assert_write_locked()
-            existing = self._qb.conn.execute(
+        with self._write_locked():
+            existing = self._read_one(
                 "SELECT id FROM qa_pairs WHERE question_text = ? AND answer_text = ? LIMIT 1",
                 (question_text, answer_text),
-            ).fetchone()
+            )
             if existing:
                 return existing["id"]
-            qa_id = self._qb.insert(
+            qa_id = self._qb_insert(
                 "qa_pairs",
                 question_text=question_text,
                 answer_text=answer_text,
@@ -141,102 +136,69 @@ class QaStore:
             return qa_id
 
     def record_attempt(self, qa_id: int, success: bool, reason: str = ""):
-        with self._mgr._write_lock:
-            self._mgr._assert_write_locked()
-            if success:
-                self._qb.conn.execute(
-                    "UPDATE qa_pairs SET success_count=success_count+1, "
-                    "total_attempts=total_attempts+1, last_failure_reason='' WHERE id=?",
-                    (qa_id,),
-                )
-            else:
-                self._qb.conn.execute(
-                    "UPDATE qa_pairs SET total_attempts=total_attempts+1, "
-                    "last_failure_reason=? WHERE id=?",
-                    (reason, qa_id),
-                )
-            self._mgr.maybe_commit()
+        if success:
+            self._write(
+                "UPDATE qa_pairs SET success_count=success_count+1, "
+                "total_attempts=total_attempts+1, last_failure_reason='' WHERE id=?",
+                (qa_id,),
+            )
+        else:
+            self._write(
+                "UPDATE qa_pairs SET total_attempts=total_attempts+1, "
+                "last_failure_reason=? WHERE id=?",
+                (reason, qa_id),
+            )
 
     def update_topic(self, qa_id: int, topic: str):
-        with self._mgr._write_lock:
-            self._mgr._assert_write_locked()
-            self._qb.update("qa_pairs", qa_id, topic=topic)
+        self._qb_update("qa_pairs", qa_id, topic=topic)
 
     def rename_topic(self, new_topic: str, old_topic: str) -> int:
-        with self._mgr._write_lock:
-            self._mgr._assert_write_locked()
-            rows = self._qb.conn.execute(
-                "UPDATE qa_pairs SET topic=? WHERE topic=?", (new_topic, old_topic))
-            self._mgr.maybe_commit()
-            return rows.rowcount
+        rows = self._write(
+            "UPDATE qa_pairs SET topic=? WHERE topic=?", (new_topic, old_topic)
+        )
+        return rows.rowcount
 
     def get_qa_difficulty(self, qa_id: int) -> str:
-        row = self._qb.conn.execute(
+        row = self._read_one(
             "SELECT difficulty_estimate FROM qa_pairs WHERE id = ?", (qa_id,)
-        ).fetchone()
+        )
         return row["difficulty_estimate"] if row else ""
 
     def get_verb_for_qa(self, qa_id: int) -> dict:
-        row = self._qb.conn.execute(
+        row = self._read_one(
             "SELECT command_verb, command_verb_secondary, command_verb_inferred "
             "FROM qa_pairs WHERE id = ?", (qa_id,)
-        ).fetchone()
-        return dict(row) if row else {}
+        )
+        return row if row else {}
 
     # ------------------------------------------------------------------
     # Data integrity helpers
     # ------------------------------------------------------------------
 
     def fix_inconsistent_counters(self) -> int:
-        """Cap ``success_count`` at ``total_attempts`` where inconsistent.
-
-        Returns the number of rows repaired (0 if already consistent).
-        """
-        with self._mgr._write_lock:
-            self._mgr._assert_write_locked()
-            row = self._qb.conn.execute(
-                "SELECT COUNT(*) as cnt FROM qa_pairs "
-                "WHERE success_count > total_attempts"
-            ).fetchone()
-            if not row or row["cnt"] == 0:
-                return 0
-            cur = self._qb.conn.execute(
-                "UPDATE qa_pairs SET success_count = total_attempts "
-                "WHERE success_count > total_attempts"
-            )
-            self._mgr.maybe_commit()
-            return cur.rowcount
+        row = self._read_one(
+            "SELECT COUNT(*) as cnt FROM qa_pairs "
+            "WHERE success_count > total_attempts"
+        )
+        if not row or row["cnt"] == 0:
+            return 0
+        cur = self._write(
+            "UPDATE qa_pairs SET success_count = total_attempts "
+            "WHERE success_count > total_attempts"
+        )
+        return cur.rowcount
 
     def set_failure_reason(self, qa_id: int, reason: str) -> None:
-        """Set ``last_failure_reason`` without modifying attempt counters.
-
-        Use this for flagging outliers / anomalies — it does NOT increment
-        ``total_attempts`` (unlike :meth:`record_attempt`).
-        """
-        with self._mgr._write_lock:
-            self._mgr._assert_write_locked()
-            self._qb.conn.execute(
-                "UPDATE qa_pairs SET last_failure_reason=? WHERE id=?",
-                (reason, qa_id),
-            )
-            self._mgr.maybe_commit()
+        self._write(
+            "UPDATE qa_pairs SET last_failure_reason=? WHERE id=?", (reason, qa_id)
+        )
 
     def set_representative(self, qa_id: int) -> None:
-        """Mark a QA as the representative of its topic."""
-        with self._mgr._write_lock:
-            self._mgr._assert_write_locked()
-            self._qb.conn.execute(
-                "UPDATE qa_pairs SET is_representative = 1 WHERE id = ?",
-                (qa_id,),
-            )
-            self._mgr.maybe_commit()
+        self._write(
+            "UPDATE qa_pairs SET is_representative = 1 WHERE id = ?", (qa_id,)
+        )
 
     def set_cross_topic(self, qa_id: int) -> None:
-        """Mark a QA as cross-topic (referenced by or references other topics)."""
-        with self._mgr._write_lock:
-            self._mgr._assert_write_locked()
-            self._qb.conn.execute(
-                "UPDATE qa_pairs SET is_cross_topic = 1 WHERE id = ?",
-                (qa_id,),
-            )
-            self._mgr.maybe_commit()
+        self._write(
+            "UPDATE qa_pairs SET is_cross_topic = 1 WHERE id = ?", (qa_id,)
+        )
