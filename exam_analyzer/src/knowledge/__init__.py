@@ -7,6 +7,7 @@ exports:
 
 from ._encoding import VectorEncoder, EmbeddingEncoder, VectorComparison
 from ._clustering import EmergentClusterer, ClusterConfig, CentroidSignal
+from .system import KpSystem
 
 __all__ = [
     "VectorEncoder",
@@ -15,4 +16,5 @@ __all__ = [
     "EmergentClusterer",
     "ClusterConfig",
     "CentroidSignal",
+    "KpSystem",
 ]
