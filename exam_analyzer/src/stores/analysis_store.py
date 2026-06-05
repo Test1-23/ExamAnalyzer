@@ -339,3 +339,20 @@ class AnalysisStore(BaseStore):
             except Exception:
                 continue
         return {k: v for k, v in totals.items() if v > 0}
+
+    # -- Fragment/Help analytical queries (was DiagnosticQueries) --
+
+    def load_fragment_helps(self) -> dict[str, set]:
+        """Pre-load entire fragment_help_map → {fragment_id: {helped_qa_id, ...}}."""
+        rows = self._read_all("SELECT fragment_id, helped_qa_id FROM fragment_help_map")
+        result: dict[str, set] = {}
+        for r in rows:
+            result.setdefault(r["fragment_id"], set()).add(r["helped_qa_id"])
+        return result
+
+    def get_active_topics(self) -> list[dict]:
+        """topic_id, mass FROM dynamic_topics WHERE mass >= 2 AND quality != 'dissolved'."""
+        return self._read_all(
+            "SELECT topic_id, mass FROM dynamic_topics "
+            "WHERE mass >= 2 AND quality != 'dissolved'"
+        )

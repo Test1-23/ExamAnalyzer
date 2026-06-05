@@ -143,16 +143,14 @@ def _detect_topic_splits(db: QADatabase, debug=None) -> int:
 
 def _detect_topic_merges(db: QADatabase, debug=None) -> int:
     """Detect topic pairs with high behavioral overlap and merge them."""
-    from .queries import DiagnosticQueries
-    dq = DiagnosticQueries(db)
-    topics = dq.get_active_topics()
+    topics = db.analysis.get_active_topics()
     if len(topics) < 2:
         return 0
 
     topic_ids = [t["topic_id"] for t in topics]
 
     # Pre-load fragment help data for affinity computation
-    frag_helps = dq.load_fragment_helps()
+    frag_helps = db.analysis.load_fragment_helps()
     topic_helps = {tid: db.fragment.get_topic_helped_questions(tid) for tid in topic_ids}
 
     merges = 0
