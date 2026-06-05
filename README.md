@@ -99,69 +99,98 @@ python tests/test_suite.py chat     # 聊天端点测试
 | 组件 | 选型 |
 |------|------|
 | LLM | DeepSeek Flash（全流程，纯 Flash 无 Pro 依赖） |
-| Embedding | sentence-transformers (all-MiniLM-L6-v2 / paraphrase-multilingual-MiniLM-L12-v2) |
-| 数据库 | SQLite WAL 模式，版本化迁移框架 |
-| PDF 提取 | pdfplumber (主) + PyMuPDF (fallback)，仅文本层，不支持 OCR/图片 |
+| Embedding | sentence-transformers (paraphrase-multilingual-MiniLM-L12-v2) |
+| 数据库 | SQLite WAL 模式，版本化迁移框架，BaseStore 抽象层 |
+| PDF 提取 | pdfplumber (主) + PyMuPDF (fallback)，仅文本层 |
 | Web | Flask + Jinja2 |
+| 事件总线 | Node.js + WebSocket（跨模块解耦，manifest 合约） |
+| 向量编码器 | 可插拔接口（EmbeddingEncoder 当前，SaeEncoder 预留） |
 
 ### 目录结构
 
 ```
 exam_analyzer/
-├── main.py                  # CLI 入口
-├── app.py                   # Flask Web 入口 (薄封装, 44 行)
-├── src/                     # 核心库 (50+ 模块, 三层架构)
-│   ├── connection_manager.py # 数据库连接管理: 唯一 conn 持有者 + WAL + 迁移 + transaction()
-│   ├── query_builder.py     # 轻量 SQL 构建器: %-格式化, 单表 CRUD, raw() 逃逸阀
-│   ├── knowledge_base.py    # QADatabase Facade: 组装 ConnMgr → QueryBuilder → 8 Domain Store
-│   ├── retriever.py         # QARetriever: embedding 相似度搜索 + 双通道检索
-│   ├── schema.py            # 31 表 DDL + 索引 + 版本化迁移
-│   ├── constants.py         # 所有可调参数
-│   ├── stores/              # 8 个领域 Store (类型安全的数据访问层)
-│   │   ├── qa_store.py      # qa_pairs
-│   │   ├── topic_store.py   # dynamic_topics + topic_links + difficulty
-│   │   ├── kp_store.py      # knowledge_points + edges + membership
-│   │   ├── fragment_store.py# ms_fragments + help_map + centrality
-│   │   ├── chat_store.py    # chat_history
-│   │   ├── student_store.py # student memory/state/confusions/trajectory
-│   │   ├── analysis_store.py# api_call_log + feedback + cache + checkpoints + deps
-│   │   └── vector_store.py  # kp_vectors + qa_kp_scores + topic_vectors
-│   ├── web/                 # Flask Blueprint Web 层 (P4 完成)
-│   │   ├── state.py         # 全局共享状态 + 线程安全访问器
-│   │   ├── app_factory.py   # create_app() 工厂
-│   │   └── routes_*.py      # 4 Blueprint, 21 路由
-│   ├── offline/             # 离线分析包
-│   │   ├── verbs.py         # 命令动词提取
-│   │   ├── difficulty.py    # 难度评估 + _evaluate_signal()
-│   │   ├── dependencies.py  # 主题依赖发现
-│   │   └── report.py        # 报告生成 + run_offline_analysis()
-│   ├── diagnostics/         # 后处理诊断包
-│   │   ├── pitfalls.py      # 陷阱发现 + 考试趋势
-│   │   ├── cross_paper.py   # 论文签名 + 基线 + 异常检测
-│   │   ├── student.py       # 学生反馈闭环
-│   │   ├── migration.py     # Fragment 迁移 + Topic 统计
-│   │   └── cascade.py       # Topic 分裂/合并 + 向量级联
-│   ├── prompts/             # Prompt 模板 + Pipeline prompt 封装
-│   ├── chat/                # 对话上下文 + 5-agent 聊天管线
-│   ├── pipeline.py          # Phase 1/2 编排器 + 数据处理辅助函数
-│   ├── knowledge_graph.py   # QA 聚类 → KP 生成 → 边发现 → 融合
-│   ├── adversarial_refiner.py  # KP 拆分/合并
-│   ├── distiller.py         # 蒸馏器 (Flash-based topic distillation)
-│   ├── evolution.py         # 自进化循环
-│   ├── topic_merger.py      # 余弦相似度 + Flash 审核主题合并
-│   └── [其他模块]           # deepseek_client, embedding_cluster, models, utils 等
-├── eval/                    # 质量评估
-│   └── feedback_agent.py    # 6 维度聊天质量评估
-├── tests/                   # 自动化测试 (40+ 单元测试 + Mock 基础设施)
-│   ├── conftest.py          # MockFlashClient + mock_db + mock_flash + mock_embedding
-│   ├── test_pure_functions.py  # 纯函数测试
-│   ├── test_store_crud.py   # Store CRUD 测试
-│   ├── test_retrieval.py    # 检索测试
-│   └── test_*.py            # mock 流水线 + 错误处理 + 单元测试
-├── input/                   # 试卷 PDF (gitignored)
-├── intermediate/            # SQLite DB + 处理状态 (gitignored)
-├── point/                   # 知识点输出 (gitignored)
-└── templates/               # Flask HTML 模板
+├── main.py                    # CLI 入口
+├── app.py                     # Flask Web 入口
+├── src/
+│   ├── db/                    # 数据库层 (Mygo refactor)
+│   │   ├── connection.py      #   ConnectionMgr: 连接池 + WAL + 迁移 + transaction()
+│   │   ├── query_builder.py   #   QueryBuilder: %-格式化 SQL 构建器
+│   │   ├── dialect.py         #   SqlDialect ABC + SqliteDialect (未来 DB 可移植)
+│   │   └── repository.py      #   BaseRepository: 泛型 CRUD 基类
+│   ├── schema/                # 33 表 DDL 按域拆分 (Mygo refactor)
+│   │   ├── _tables_core.py    #   qa_pairs, exam_sessions, chat_history, checkpoints
+│   │   ├── _tables_kp.py      #   knowledge_points, kp_edges, qa_kp_membership, vectors
+│   │   ├── _tables_topic.py   #   dynamic_topics, topic_links, dependencies, difficulty
+│   │   ├── _tables_fragment.py#   ms_fragments, help_map, membership, centrality
+│   │   ├── _tables_student.py #   student_memory, knowledge_state, confusions, trajectory
+│   │   ├── _tables_analysis.py#   api_call_log, feedback, trends, signatures, cache...
+│   │   ├── _indexes.py        #   4 个索引定义
+│   │   └── _migrations.py     #   3 个版本化迁移
+│   ├── stores/                # 8 个领域 Store (继承 BaseStore)
+│   │   ├── base.py            #   BaseStore: _write / _read_one / _read_all / _write_locked
+│   │   ├── qa_store.py        #   qa_pairs (delete → insert → rename)
+│   │   ├── topic_store.py     #   dynamic_topics + links + difficulty
+│   │   ├── kp_store.py        #   knowledge_points + edges + membership
+│   │   ├── fragment_store.py  #   ms_fragments + help_map + centrality
+│   │   ├── chat_store.py      #   chat_history
+│   │   ├── student_store.py   #   student memory/state/confusions/trajectory
+│   │   ├── analysis_store.py  #   api_call_log + feedback + cache + deps + 诊断查询
+│   │   └── vector_store.py    #   kp_vectors + qa_kp_scores + topic_vectors
+│   ├── knowledge/             # 知识点子系统 (Mygo 新建)
+│   │   ├── _encoding.py       #   VectorEncoder ABC + EmbeddingEncoder
+│   │   ├── _clustering.py     #   EmergentClusterer: 涌现聚类, 自适应阈值
+│   │   └── system.py          #   KpSystem: 统一入口 facade
+│   ├── analysis/              # 后处理分析 (Mygo refactor: diagnostics + offline 合并)
+│   │   ├── _cascade.py        #   Topic 分裂/合并 + 向量级联
+│   │   ├── _cross_paper.py    #   论文签名 + 基线 + 异常检测
+│   │   ├── _migration.py      #   Fragment 迁移 + Topic 统计
+│   │   ├── _pitfalls.py       #   陷阱发现 + 考试趋势
+│   │   ├── _student.py        #   学生反馈闭环
+│   │   ├── _verbs.py          #   命令动词提取
+│   │   ├── _difficulty.py     #   难度评估
+│   │   ├── _dependencies.py   #   主题依赖发现
+│   │   └── _report.py         #   报告生成 + run_offline_analysis()
+│   ├── events/                # Node.js 事件总线客户端 (Mygo 新建)
+│   │   ├── events.py          #   EventType 常量 (28 种事件)
+│   │   ├── bus_client.py      #   EventBusClient: HTTP 发布, fire-and-forget
+│   │   └── manifest.py        #   ModuleManifest: 5 模块事件合约
+│   ├── web/                   # Flask Blueprint Web 层
+│   │   ├── state.py           #   全局共享状态 + 线程安全访问器
+│   │   ├── app_factory.py     #   create_app() 工厂
+│   │   └── routes_*.py        #   4 Blueprint, 21 路由
+│   ├── pipeline/              # 流水线编排 (P4 拆分)
+│   │   ├── orchestrator.py    #   run_pipeline(): 支持 emergent 聚类路径
+│   │   ├── context.py         #   PipelineContext
+│   │   ├── counters.py        #   StageCounters
+│   │   ├── result.py          #   PipelineResult
+│   │   └── tracker.py         #   ProgressTracker
+│   ├── chat/                  # 5-agent 聊天管线
+│   │   ├── agents.py          #   Query Analyst → Answer Gen → Critic → Suggest
+│   │   └── context.py         #   KP 缓存 + 分析上下文
+│   ├── prompts/               # Prompt 模板
+│   │   ├── prompt_factory.py  #   PromptType 枚举 + PromptBuilder (17 种 prompt)
+│   │   └── pipeline_prompts.py#   QA 配对 + 摘要 + 答题 + 评分 prompt
+│   ├── knowledge_graph.py     # [遗留] QA 聚类 → KP 生成 → 边融合
+│   ├── adversarial_refiner.py # [遗留] KP 拆分/合并 (待迁移至 knowledge/)
+│   ├── distiller.py           # [遗留] 蒸馏器 (待迁移至 knowledge/)
+│   ├── evolution.py           # [遗留] 自进化循环 (待迁移至 knowledge/)
+│   ├── topic_merger.py        # [遗留] 主题合并 (待迁移至 knowledge/)
+│   ├── retriever.py           # [遗留] QARetriever (待迁移至 knowledge/)
+│   └── [其他模块]             # deepseek_client, embedding_cluster, models, utils 等
+├── eval/                      # 质量评估
+│   └── feedback_agent.py      # 6 维度聊天质量评估
+├── tests/                     # 自动化测试 (77+ 单元测试)
+│   ├── conftest.py            # Mock 基础设施
+│   ├── test_store_crud.py     # Store CRUD 测试
+│   ├── test_pure_functions.py # 纯函数测试
+│   └── test_*.py              # 单元 + mock + 检索测试
+├── input/                     # 试卷 PDF (gitignored)
+├── intermediate/              # SQLite DB (gitignored)
+└── static/ + templates/       # Web 前端 (Flask + Jinja2)
+
+event_bus/                     # Node.js 事件总线 (Mygo 新建)
+└── server.js                  # 主总线 (:3030) + 5 子总线 (:3031-:3035)
 ```
 
 ### 流水线架构
@@ -173,10 +202,12 @@ exam_analyzer/
   ├─ QA 配对 (Flash: 全文 QP+MS → 匹配题目与答案)
   │
   ├─ 逐 QA 处理 ────────────────────────────────────
-  │   Phase 1 (首篇): Flash summary + topic → 直接入库
-  │   Phase 2 (后续): summary → 检索 + KP 参考 → 答题 → MS 评分 + 失分分类 → 入库
-  │   MS 得分点提取: Flash 拆分 MS 答案 → MS_Fragments
-  │   行为数据采集: 记录 Fragment 帮助了哪些题目 → Fragment_Help_Map
+  │   传统路径 (use_emergent=False):
+  │     Phase 1 (首篇): Flash summary + topic → 直接入库
+  │     Phase 2 (后续): summary → 检索 → 答题 → MS 评分 → 入库
+  │   涌现聚类路径 (use_emergent=True, Mygo-003):
+  │     所有论文统一处理: encode → EmergentClusterer.assign_qa() → 入库
+  │     无 Phase 1/2 分叉, 自适应阈值, 胚胎 KP 可见+衰减
   │
   ├─ 后处理 ────────────────────────────────────────
   │   Topic Merge → Distillation → Review → points.txt
@@ -190,6 +221,39 @@ exam_analyzer/
       Topic 演化: 分裂 / 合并 / 消解
       自动 KP 生成: 稳定 Topic → Flash 命名 + 解释
       学生反馈闭环: 困惑 → 难度调整
+```
+
+### 事件总线架构 (Mygo-000)
+
+```
+┌──────────┐  ┌───────────┐  ┌──────────┐  ┌──────┐  ┌─────┐
+│ pipeline │  │ knowledge │  │ analysis │  │ chat │  │ web │
+└────┬─────┘  └─────┬─────┘  └────┬─────┘  └──┬───┘  └──┬──┘
+     │              │              │           │          │
+     └──────────────┴──────────────┴───────────┴──────────┘
+                            │
+                   Node.js 事件总线
+             主总线 (:3030) + 5 子总线 (:3031-:3035)
+             28 种 KP 生命周期事件, 显式 manifest 合约
+```
+
+### 知识点系统 (Mygo-001/002)
+
+```
+VectorEncoder (可插拔接口)
+  ├─ EmbeddingEncoder (当前: sentence-transformer, 384-dim)
+  └─ SaeEncoder (预留: 稀疏自编码器, 独立仓库训练)
+
+EmergentClusterer
+  ├─ 涌现聚类: 无预设 K, 无固定阈值
+  ├─ 每 KP 独立自适阈值 (median - MAD)
+  ├─ 胚胎 KP 始终可见 + 衰减机制
+  └─ 三信号质心调整 (help_feedback / post_process / user_input)
+
+KpSystem (统一入口)
+  ├─ ingest_qa(): QA → KP 分配
+  ├─ apply_feedback_signal(): 帮助反馈 → 向量调整
+  └─ on_paper_completed(): 衰减检查 + 质量晋升 + 事件发布
 ```
 
 ### 行为驱动的自组织知识图谱 (Phase 1-4)
@@ -251,21 +315,20 @@ Layer 3: 向量空间自组织
 
 ### 关键设计决策
 
-- **Mark Scheme 为唯一 Ground Truth**：MS 答案原文拆分为得分点 (MS_Fragments)，不可修改，所有知识追溯至此
-- **行为数据驱动聚类**：两个得分点是否属于同一概念，由它们是否互相帮助答题决定，替代 embedding 相似度聚类
-- **Topic 是活体**：会生长（新 Fragment 加入）、分裂（行为分化）、合并（行为趋同）、消解（成员流失）
-- **KP 是 Topic 的投影**：Topic 稳定后才由 Flash 生成命名和解释，Topic 变化后重新生成
-- **质量由实测驱动**：KP 的有效性由 Phase 2 答题得分验证，非 Flash 自我评价
-- **对抗精炼已退役**：Flash 审查 Flash 被行为驱动的质量度量替代
-- **LLM 作为结构化分类器**：新 QA 由 LLM 判断与所有 KP 的相关性（1 次调用/QA，分类非生成）
+- **Mark Scheme 为唯一 Ground Truth**：MS 答案原文拆分为得分点 (MS_Fragments)，不可修改
+- **涌现聚类 (Mygo-001)**：KP 由 QA 向量自然聚集形成，每 KP 独立自适应阈值，胚胎 KP 始终可见+衰减
+- **可插拔编码器 (Mygo-001)**：`VectorEncoder` 抽象接口，embedding 当前默认，SAE 预留
+- **事件驱动解耦 (Mygo-000)**：5 模块间通过 Node.js 事件总线通信，显式 manifest 合约
+- **统一流水线 (Mygo-003)**：`use_emergent=True` 消除 Phase 1/2 分叉，所有论文相同处理路径
+- **BaseStore 消除样板 (A2)**：`_write()` / `_read_all()` 替代 49 处手动写锁
+- **Schema 按域拆分 (A1)**：33 表 DDL 拆为 6 个域文件，便于维护
+- **Topic 是活体**：会生长（新 Fragment 加入）、分裂、合并、消解
+- **KP 是 Topic 的投影**：Topic 稳定后才由 Flash 生成命名和解释
+- **行为数据驱动聚类**：Fragment 是否属于同一概念由其帮助答题的行为决定
 - **双通道检索**：embedding 通道（召回）+ Topic 结构通道（精度）+ 行为图漫步
-- **Fragment 中心性 + 图中心性质心**：核心 Fragment 主导向量调整，孤立点被忽略
-- **三层级联向量调整**：Fragment → KP → Topic 级联自组织
 - **Wilson 区间 Beta 权重**：精确下置信界估计，小样本更保守
-- **增量蒸馏缓存**：MD5 指纹比对，仅重蒸变化的 Topic
-- **双语 prompt**：`detect_content_lang()` 自动中英文切换
-- **`%` 格式化 prompt**：禁止 `.format()`——MS 文本含 `{` `}` 会导致崩溃
-- **线程安全 + 动态并发**：`threading.Lock` + `PIPELINE_MAX_WORKERS` 环境变量，默认 8/16
+- **双语 prompt**：`%` 格式化 + `detect_content_lang()` 自动中英文切换
+- **线程安全**：`threading.RLock` + WAL 模式 + per-thread 连接池
 
 ### 已知限制
 
@@ -274,6 +337,21 @@ Layer 3: 向量空间自组织
 - **Pitfalls 为推论**：系统无真实学生错题数据，陷阱来自 Phase 2 失分推断
 - **行为数据冷启动**：前 2 份试卷期间 Fragment 迁移和 Topic 演化受限，知识结构质量随数据积累提升
 - **Embedding 仅辅助**：仅用于冷启动临时分组，不作为主要聚类信号
+
+## 开发
+
+### 提交规范
+
+参见 `CLAUDE.md`（gitignored，本地开发参考）。简要规则：
+
+| 前缀 | 用途 |
+|------|------|
+| `Mygo - NNN` | 架构重构（跨模块结构调整） |
+| `WSD-NNN` | 小修复、清理、bug 修正 |
+
+### SAE 项目
+
+稀疏自编码器（SAE）在独立仓库 `../sae-project/` 中训练。通过 `VectorEncoder` 接口可插拔集成，详见 `AgentChatRoom/plan.md`。
 
 ## License
 
