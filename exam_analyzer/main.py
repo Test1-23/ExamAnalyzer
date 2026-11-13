@@ -34,7 +34,7 @@ def main():
             input_dir=INPUT_DIR,
             output_path=POINTS_FILE,
             progress_callback=progress,
-            debug_callback=lambda msg: print(f"[DEBUG] {msg}"),
+            debug=lambda msg: print(f"[DEBUG] {msg}"),
         )
         print("\n完成！")
     except Exception as e:
