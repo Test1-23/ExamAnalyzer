@@ -23,6 +23,20 @@ class TopicStore(BaseStore):
             (mass, cohesion, stability, topic_id),
         )
 
+    def prune(self, keep_ids: list[str]) -> int:
+        """Mark topics that no longer exist in the layout as archived."""
+        if not keep_ids:
+            return self._write(
+                "UPDATE dynamic_topics SET quality='archived' "
+                "WHERE quality != 'archived'"
+            ).rowcount
+        placeholders = ",".join("?" * len(keep_ids))
+        return self._write(
+            "UPDATE dynamic_topics SET quality='archived' "
+            f"WHERE topic_id NOT IN ({placeholders}) AND quality != 'archived'",
+            tuple(keep_ids),
+        ).rowcount
+
     def set_kp(self, topic_id: str, kp_concept: str, kp_detail: str):
         self._write(
             """UPDATE dynamic_topics SET kp_concept=?, kp_detail=?,

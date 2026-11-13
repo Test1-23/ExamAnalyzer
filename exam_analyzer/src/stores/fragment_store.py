@@ -20,6 +20,21 @@ class FragmentStore(BaseStore):
             count += 1
         return count
 
+    def get_all_for_layout(self) -> list[dict]:
+        """All fragments as layout inputs (text + owning QA)."""
+        return self._read_all(
+            "SELECT point_id, qa_id, point_text, marks FROM ms_fragments "
+            "ORDER BY qa_id, point_id"
+        )
+
+    def get_help_edges(self) -> list[tuple[str, int, float]]:
+        """(fragment_id, helped_qa_id, help_effect) behavioral edges."""
+        rows = self._read_all(
+            "SELECT fragment_id, helped_qa_id, help_effect FROM fragment_help_map"
+        )
+        return [(r["fragment_id"], r["helped_qa_id"], r["help_effect"] or 0.0)
+                for r in rows]
+
     # -- Fragment Help Map --
 
     def record_help_with_level(self, fragment_id: str, helped_qa_id: int,

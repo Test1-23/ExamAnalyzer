@@ -59,6 +59,8 @@ class KPSpec:
     evidence_count: int = 0
     quality: str = "draft"
     challenge_history: str = ""
+    needs_naming: int = 0
+    encoder_version: str = ""
 
 
 @dataclass

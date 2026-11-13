@@ -24,4 +24,20 @@ SCHEMA_MIGRATIONS: list[tuple[int, str, list[str]]] = [
         "ALTER TABLE kp_vectors ADD COLUMN feature_activations BLOB",
         "ALTER TABLE qa_kp_scores ADD COLUMN encoder_version TEXT DEFAULT 'embedding'",
     ]),
+    (5, "knowledge-space layout: vector_positions + fragment norm_key + naming flags", [
+        "CREATE TABLE IF NOT EXISTS vector_positions ("
+        "object_type TEXT NOT NULL, "
+        "object_id TEXT NOT NULL, "
+        "position BLOB NOT NULL, "
+        "anchor BLOB NOT NULL, "
+        "encoder_version TEXT DEFAULT '', "
+        "epoch INTEGER DEFAULT 0, "
+        "updated_at TEXT DEFAULT (datetime('now')), "
+        "PRIMARY KEY (object_type, object_id))",
+        "CREATE INDEX IF NOT EXISTS idx_vector_positions_type "
+        "ON vector_positions(object_type)",
+        "ALTER TABLE ms_fragments ADD COLUMN norm_key TEXT DEFAULT ''",
+        "ALTER TABLE knowledge_points ADD COLUMN needs_naming INTEGER DEFAULT 0",
+        "ALTER TABLE knowledge_points ADD COLUMN encoder_version TEXT DEFAULT ''",
+    ]),
 ]

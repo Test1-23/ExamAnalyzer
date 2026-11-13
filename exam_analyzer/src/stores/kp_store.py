@@ -19,13 +19,14 @@ class KpStore(BaseStore):
                    cluster_id=?, centroid_vector=?, core_concept=?,
                    core_detail=?, variations=?, scoring_pattern=?,
                    typical_marks=?, cohesion=?, evidence_count=?,
-                   quality=?, challenge_history=?,
-                   last_validated_at=datetime('now')
+                   quality=?, challenge_history=?, needs_naming=?,
+                   encoder_version=?, last_validated_at=datetime('now')
                    WHERE id=?""",
                 (spec.name, spec.description, spec.cluster_id, spec.centroid_vector,
                  spec.core_concept, spec.core_detail, spec.variations, spec.scoring_pattern,
                  spec.typical_marks, spec.cohesion, spec.evidence_count, spec.quality,
-                 spec.challenge_history, spec.kp_id),
+                 spec.challenge_history, spec.needs_naming, spec.encoder_version,
+                 spec.kp_id),
             )
         else:
             self._write(
@@ -33,12 +34,12 @@ class KpStore(BaseStore):
                    (id, name, description, cluster_id, centroid_vector,
                     core_concept, core_detail, variations, scoring_pattern,
                     typical_marks, cohesion, evidence_count, quality,
-                    challenge_history)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    challenge_history, needs_naming, encoder_version)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (spec.kp_id, spec.name, spec.description, spec.cluster_id, spec.centroid_vector,
                  spec.core_concept, spec.core_detail, spec.variations, spec.scoring_pattern,
                  spec.typical_marks, spec.cohesion, spec.evidence_count, spec.quality,
-                 spec.challenge_history),
+                 spec.challenge_history, spec.needs_naming, spec.encoder_version),
             )
 
     def get_all(self) -> list[dict]:
@@ -190,3 +191,21 @@ class KpStore(BaseStore):
 
     def delete_kp(self, kp_id: str) -> None:
         self._write("DELETE FROM knowledge_points WHERE id=?", (kp_id,))
+
+    def reset_memberships(self) -> int:
+        """Clear all QA-KP memberships before a full relayout rewrite."""
+        return self._write("DELETE FROM qa_kp_membership").rowcount
+
+    def mark_archived(self, keep_ids: list[str]) -> int:
+        """Archive KPs that no longer exist in the new layout (never deleted)."""
+        if not keep_ids:
+            return self._write(
+                "UPDATE knowledge_points SET quality='archived' "
+                "WHERE quality != 'archived'"
+            ).rowcount
+        placeholders = ",".join("?" * len(keep_ids))
+        return self._write(
+            "UPDATE knowledge_points SET quality='archived' "
+            f"WHERE id NOT IN ({placeholders}) AND quality != 'archived'",
+            tuple(keep_ids),
+        ).rowcount
