@@ -83,11 +83,15 @@ python main.py
 ### 测试
 
 ```bash
-python tests/test_suite.py          # 交互选择模式
-python tests/test_suite.py check    # 即时验证现有 DB
-python tests/test_suite.py light    # 轻量测试
-python tests/test_suite.py full     # 全量测试
-python tests/test_suite.py chat     # 聊天端点测试
+# 单元测试（离线，无 API key 也可跑；已随仓库分发）
+pytest -m "not integration"
+
+# 手动集成脚本（需真实 API key + 本地 DB，不入库）
+python tests/_manual_suite.py          # 交互选择模式
+python tests/_manual_suite.py check    # 即时验证现有 DB
+python tests/_manual_suite.py light    # 轻量测试
+python tests/_manual_suite.py full     # 全量测试
+python tests/_manual_suite.py chat     # 聊天端点测试
 ```
 
 报告输出到 `TestReport/`。
@@ -180,7 +184,7 @@ exam_analyzer/
 │   └── [其他模块]             # deepseek_client, embedding_cluster, models, utils 等
 ├── eval/                      # 质量评估
 │   └── feedback_agent.py      # 6 维度聊天质量评估
-├── tests/                     # 自动化测试 (77+ 单元测试)
+├── tests/                     # 自动化测试 (222 个用例；手动集成脚本单独忽略)
 │   ├── conftest.py            # Mock 基础设施
 │   ├── test_store_crud.py     # Store CRUD 测试
 │   ├── test_pure_functions.py # 纯函数测试

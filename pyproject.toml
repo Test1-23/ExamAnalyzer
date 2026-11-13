@@ -28,5 +28,5 @@ ignore_missing_imports = true
 warn_return_any = true
 warn_unused_configs = true
 
-[tool.pytest.ini_options]
-testpaths = ["exam_analyzer/tests"]
+# pytest configuration lives in pytest.ini (single source; a duplicate
+# [tool.pytest.ini_options] here would be silently ignored by pytest).

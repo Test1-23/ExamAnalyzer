@@ -30,8 +30,14 @@ exam_analyzer/input/
 exam_analyzer/input/keepout/
 exam_analyzer/feedback/
 exam_analyzer/CLAUDE.md
-# Integration tests (require real API keys — must NOT be committed)
-exam_analyzer/tests
+# Tests: commit the hermetic pytest suite.
+# NOTE: a bare directory rule (exam_analyzer/tests) would ignore the whole tree,
+# and a directory-level exclusion makes every "!" whitelist below a no-op.
+exam_analyzer/tests/*
+!exam_analyzer/tests/*.py
+# Manual scripts — require real API keys / local DB / local PDFs: keep OUT of git
+exam_analyzer/tests/test_reachability.py
+exam_analyzer/tests/_manual_suite.py
 
 # Generated analysis reports
 exam_analyzer/分析报告*.md

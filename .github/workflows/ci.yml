@@ -11,4 +11,11 @@ jobs:
         with:
           python-version: '3.12'
       - run: pip install -r requirements.txt
-      - run: pytest -m "not integration" -v
+      - name: Run hermetic test suite
+        run: pytest -m "not integration" -q
+      - name: Guard against an empty collection
+        if: always()
+        run: |
+          count=$(pytest -m "not integration" --collect-only -q 2>/dev/null | tail -1 | grep -oE '^[0-9]+' || echo 0)
+          echo "collected: $count"
+          test "$count" -ge 200
