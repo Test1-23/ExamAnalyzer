@@ -16,6 +16,7 @@ from src.knowledge._geometry import (
     mutual_knn_adjacency,
     normalize_rows,
     partition_ari,
+    propagate_qa_membership,
     relax,
 )
 
@@ -240,3 +241,38 @@ def test_build_edges_never_links_same_paper_questions():
     index = {("qa", str(i)): i for i in range(4)}
     edges = build_edges(index, {})
     assert edges == []
+
+
+def test_propagate_qa_membership_pulls_same_question_together():
+    rng = np.random.default_rng(0)
+    base = normalize_rows(rng.normal(size=(1, DIM)))[0]
+    # three fragments of one question, scattered around a shared centre
+    pos = normalize_rows(np.vstack([base + rng.normal(0, 0.05, (3, DIM)),
+                                    normalize_rows(rng.normal(size=(1, DIM)))]))
+    qa_of_row = np.array([1, 1, 1, 2])
+    before = float(pos[0] @ pos[1])
+    out = propagate_qa_membership(pos, qa_of_row, weight=0.5, rounds=1)
+    after = float(out[0] @ out[1])
+    assert after > before
+    # the unrelated fragment must not be dragged in
+    assert float(out[0] @ out[3]) < 0.9
+
+
+def test_propagate_qa_membership_weight_zero_is_identity():
+    pos = random_anchors(10, seed=3)
+    qa_of_row = np.array([0, 0, 1, 1, 2, 2, 3, 3, 4, 4])
+    out = propagate_qa_membership(pos, qa_of_row, weight=0.0)
+    assert np.allclose(out, pos)
+
+
+def test_propagate_qa_membership_keeps_unit_norm():
+    pos = random_anchors(12, seed=4)
+    qa_of_row = np.array([0, 0, 0, 1, 1, 1, 2, 2, 2, 3, 3, 3])
+    out = propagate_qa_membership(pos, qa_of_row, weight=0.6, rounds=2)
+    assert np.allclose(np.linalg.norm(out, axis=1), 1.0)
+
+
+def test_propagate_qa_membership_rejects_length_mismatch():
+    pos = random_anchors(4, seed=5)
+    with pytest.raises(ValueError):
+        propagate_qa_membership(pos, np.array([1, 1]), weight=0.5)

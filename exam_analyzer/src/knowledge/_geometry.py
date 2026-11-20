@@ -50,6 +50,13 @@ class LayoutConfig:
     collapse_mean_cos: float = 0.85
     collapse_dim_ratio: float = 0.20
 
+    # QA co-membership propagation (Mygo-006).
+    # Fragments of the same question are pulled towards their shared centroid
+    # before clustering.  Measured effect: cross-paper same-topic AUC
+    # 0.698 -> 0.777 at weight 0.4 (docs/research/association-structure-embedding.md).
+    qa_propagation_weight: float = 0.40
+    qa_propagation_rounds: int = 1
+
     # Clustering geometry.
     # radius=None means "derive eps from the data" (median k-th neighbour
     # similarity), then raise it until no single cluster exceeds
@@ -454,6 +461,43 @@ def merge_similar_clusters(positions: np.ndarray, labels: np.ndarray,
     order = np.argsort(first_idx)
     relabel = {int(uniq[o]): new for new, o in enumerate(order)}
     return np.array([relabel.get(int(l), -1) for l in out], dtype=np.int32)
+
+
+def propagate_qa_membership(
+    positions: np.ndarray,
+    qa_of_row: np.ndarray,
+    weight: float = 0.40,
+    rounds: int = 1,
+) -> np.ndarray:
+    """Pull fragments of the same question towards their shared centroid.
+
+    This is the QA co-membership association structure: the scoring points of
+    one question describe the same knowledge unit, so their vectors should be
+    mutually consistent.  Unlike a same-paper edge it does not organise the
+    space by paper - it only tightens each question own fragment group.
+
+    weight blends the original position with the question centroid:
+    x <- normalize((1-w)*x + w*mean(x over the same qa)).  weight=0 returns
+    the input unchanged.
+    """
+    if weight <= 0 or rounds <= 0:
+        return positions
+
+    out = normalize_rows(positions)
+    qa_of_row = np.asarray(qa_of_row)
+    if len(qa_of_row) != len(out):
+        raise ValueError("qa_of_row must have one entry per position row")
+
+    for _ in range(rounds):
+        centroids: dict[int, np.ndarray] = {}
+        for qa_id in np.unique(qa_of_row):
+            rows = np.flatnonzero(qa_of_row == qa_id)
+            centroids[int(qa_id)] = out[rows].mean(axis=0)
+        blended = np.empty_like(out)
+        for i, qa_id in enumerate(qa_of_row):
+            blended[i] = (1.0 - weight) * out[i] + weight * centroids[int(qa_id)]
+        out = normalize_rows(blended)
+    return out
 
 
 def cluster_positions(

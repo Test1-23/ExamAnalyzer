@@ -30,6 +30,7 @@ from ._geometry import (
     cluster_positions,
     layout_metrics,
     normalize_rows,
+    propagate_qa_membership,
     relax,
 )
 
@@ -212,6 +213,18 @@ def run_layout(
     # cluster fragments only; QAs inherit their fragments' KP
     frag_pos = positions[: len(fragments)]
     qa_pos = positions[len(fragments):]
+
+    # QA co-membership: tighten each question's own fragment group before
+    # clustering.  Measured effect on the 9618 set: cross-paper same-topic
+    # AUC 0.698 -> 0.777 (docs/research/association-structure-embedding.md).
+    qa_of_row = np.array([int(f["qa_id"]) for f in fragments])
+    frag_pos = propagate_qa_membership(
+        frag_pos, qa_of_row,
+        weight=cfg.qa_propagation_weight,
+        rounds=cfg.qa_propagation_rounds,
+    )
+    say(f"qa-propagation: weight={cfg.qa_propagation_weight} rounds={cfg.qa_propagation_rounds}")
+
     labels = cluster_positions(frag_pos, cfg)
 
     clusters: dict[int, dict] = {}
