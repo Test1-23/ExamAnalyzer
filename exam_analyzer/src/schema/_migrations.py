@@ -40,4 +40,9 @@ SCHEMA_MIGRATIONS: list[tuple[int, str, list[str]]] = [
         "ALTER TABLE knowledge_points ADD COLUMN needs_naming INTEGER DEFAULT 0",
         "ALTER TABLE knowledge_points ADD COLUMN encoder_version TEXT DEFAULT ''",
     ]),
+    (6, "attention-based fragment extraction: source + score + span", [
+        "ALTER TABLE ms_fragments ADD COLUMN source TEXT DEFAULT 'llm'",
+        "ALTER TABLE ms_fragments ADD COLUMN attention_score REAL DEFAULT 0",
+        "ALTER TABLE ms_fragments ADD COLUMN token_span TEXT DEFAULT ''",
+    ]),
 ]

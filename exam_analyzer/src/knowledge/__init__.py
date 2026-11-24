@@ -8,6 +8,9 @@ exports:
 from ._encoding import VectorEncoder, EmbeddingEncoder, VectorComparison
 from ._clustering import EmergentClusterer, ClusterConfig, CentroidSignal
 from .system import KpSystem
+from ._attention import (
+    AttentionResult, QwenAttentionExtractor, build_activation_units, gate_text,
+)
 
 __all__ = [
     "VectorEncoder",
@@ -17,4 +20,8 @@ __all__ = [
     "ClusterConfig",
     "CentroidSignal",
     "KpSystem",
+    "AttentionResult",
+    "QwenAttentionExtractor",
+    "build_activation_units",
+    "gate_text",
 ]

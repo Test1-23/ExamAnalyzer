@@ -13,9 +13,12 @@ class FragmentStore(BaseStore):
         count = 0
         for f in fragments:
             self._write(
-                """INSERT OR IGNORE INTO ms_fragments (point_id, qa_id, point_text, marks)
-                   VALUES (?, ?, ?, ?)""",
-                (f["point_id"], f["qa_id"], f["point_text"], f.get("marks", 1)),
+                """INSERT OR IGNORE INTO ms_fragments
+                   (point_id, qa_id, point_text, marks, source, attention_score, token_span)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (f["point_id"], f["qa_id"], f["point_text"], f.get("marks", 1),
+                 f.get("source", "llm"), f.get("attention_score", 0.0),
+                 f.get("token_span", "")),
             )
             count += 1
         return count
@@ -23,7 +26,7 @@ class FragmentStore(BaseStore):
     def get_all_for_layout(self) -> list[dict]:
         """All fragments as layout inputs (text + owning QA)."""
         return self._read_all(
-            "SELECT point_id, qa_id, point_text, marks FROM ms_fragments "
+            "SELECT point_id, qa_id, point_text, marks, source, attention_score FROM ms_fragments "
             "ORDER BY qa_id, point_id"
         )
 

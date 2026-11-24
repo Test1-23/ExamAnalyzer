@@ -48,6 +48,12 @@ from ..constants import (
     CENTRALITY_HIGH, CENTRALITY_MID, CENTRALITY_LOW,
     HELP_DIRECT_THRESHOLD, HELP_UNDERSTANDING_THRESHOLD,
     SEASON_MAP, YEAR_BASE_OFFSET,
+    ATTENTION_GATE_THRESHOLD, ATTENTION_GATE_MAX_GAP, ATTENTION_GATE_MIN_LEN,
+    FRAGMENT_SOURCE,
+)
+
+from ..knowledge._attention import (
+    QwenAttentionExtractor, build_activation_units,
 )
 
 # ============================================================
@@ -101,8 +107,47 @@ def _record_fragment_help(used_ids: set, covered: list, missed_texts: list,
                     fid, qa_id, round(help_effect, 3), help_level)
 
 
-def _extract_ms_fragments(answer_text: str, qa_id: int, client, debug: Callable) -> list[dict]:
-    """Split a mark scheme answer into individual scoring points. Preserves original wording."""
+def _attention_fragments(question_text: str, answer_text: str, qa_id: int,
+                         debug: Callable) -> list[dict] | None:
+    """Extract MS fragments via projected QP->MS attention.
+
+    Returns None when the attention path is unavailable or produced nothing,
+    so the caller can fall back to LLM extraction.
+    """
+    extractor = QwenAttentionExtractor.shared()
+    if not extractor.available():
+        return None
+
+    result = extractor.extract(question_text, answer_text)
+    if result is None:
+        return None
+
+    units = build_activation_units(
+        result.tokens, result.scores, result.qp_end,
+        threshold=ATTENTION_GATE_THRESHOLD,
+        max_gap=ATTENTION_GATE_MAX_GAP,
+        min_len=ATTENTION_GATE_MIN_LEN,
+    )
+    if not units:
+        return None
+
+    fragments = []
+    for i, unit in enumerate(units):
+        fragments.append({
+            "point_id": f"f_{qa_id}_{i}",
+            "qa_id": qa_id,
+            "point_text": unit["text"],
+            "marks": 1,
+            "source": "attention",
+            "attention_score": round(unit["score"], 4),
+            "token_span": f"{unit['start']}:{unit['end']}",
+        })
+    debug(f"  attention: {len(units)} units from {result.n_ms_tokens} MS tokens")
+    return fragments
+
+
+def _llm_fragments(answer_text: str, qa_id: int, client, debug: Callable) -> list[dict]:
+    """Split a mark scheme answer into scoring points via the LLM."""
     messages = PromptBuilder.build(PromptType.FRAGMENT, lang_source=answer_text, answer_text=answer_text)
     try:
         result, _ = call_flash(client, messages, max_retries=1, debug=debug)
@@ -121,9 +166,36 @@ def _extract_ms_fragments(answer_text: str, qa_id: int, client, debug: Callable)
                 "qa_id": qa_id,
                 "point_text": text.strip(),
                 "marks": p.get("marks", 1) if isinstance(p, dict) else 1,
+                "source": "llm",
+                "attention_score": 0.0,
+                "token_span": "",
             })
     return fragments
 
+
+def _extract_ms_fragments(answer_text: str, qa_id: int, client, debug: Callable,
+                          question_text: str = "") -> list[dict]:
+    """Split a mark scheme answer into individual scoring points.
+
+    Primary path: projected QP->MS attention (see knowledge/_attention.py).
+    Fallback: LLM extraction.  FRAGMENT_SOURCE controls the behaviour:
+      "attention" - attention only, LLM fallback when unavailable
+      "llm"       - LLM only
+      "both"      - run both, keep attention fragments (LLM result logged)
+    """
+    source = (FRAGMENT_SOURCE or "attention").lower()
+
+    if source in ("attention", "both"):
+        att = _attention_fragments(question_text, answer_text, qa_id, debug)
+        if att:
+            if source == "both":
+                llm = _llm_fragments(answer_text, qa_id, client, debug)
+                debug(f"  A/B: attention={len(att)} llm={len(llm)} fragments")
+            return att
+        if source == "attention":
+            debug("  attention unavailable, falling back to LLM")
+
+    return _llm_fragments(answer_text, qa_id, client, debug)
 
 def _classify_qa_against_kps(qa_text: str, answer_text: str, kp_concepts: list[dict],
                               client, debug: Callable) -> dict[str, float]:
@@ -307,7 +379,9 @@ def _phase1_worker(qa: "QAPair", existing_topics: list | None,
     ctx.db.qa.record_attempt(qa_id, success=True)
 
     try:
-        fragments = _extract_ms_fragments(qa.answer_text, qa_id, ctx.client, ctx.debug)
+        fragments = _extract_ms_fragments(
+            qa.answer_text, qa_id, ctx.client, ctx.debug,
+            question_text=qa.question_text)
         if fragments:
             with ctx.db.transaction():
                 ctx.db.fragment.insert_batch(fragments)

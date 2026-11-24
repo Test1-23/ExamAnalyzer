@@ -14,6 +14,9 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["ruff", "mypy", "pytest", "pytest-mock"]
+# Optional: local Qwen3 attention for QP->MS fragment extraction.
+# Install with: pip install -e ".[attention]"
+attention = ["torch>=2.0", "safetensors>=0.4", "transformers>=4.40"]
 
 [tool.ruff]
 target-version = "py310"

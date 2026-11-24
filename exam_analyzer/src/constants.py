@@ -120,3 +120,20 @@ KG_SEQUENTIAL_MIN_PAPERS = _INT("EXAM_KG_SEQUENTIAL_MIN_PAPERS", 3)
 KG_LEARNING_PATH_MIN_STUDENTS = _INT("EXAM_KG_LEARNING_PATH_MIN_STUDENTS", 3)
 KG_SEMANTIC_EDGE_THRESHOLD = _FLT("EXAM_KG_SEMANTIC_EDGE_THRESHOLD", 0.5)
 KG_SEMANTIC_EDGE_MEDIUM_THRESHOLD = _FLT("EXAM_KG_SEMANTIC_EDGE_MEDIUM", 0.65)
+
+# ============================================================
+# Attention-based fragment extraction
+# ============================================================
+# Empty path disables the attention path entirely (LLM extraction is used).
+ATTENTION_MODEL_PATH = _STR("EXAM_ATTENTION_MODEL", "")
+# Comma-separated layer indices; layer 8 measured best after o_proj projection.
+ATTENTION_LAYERS = tuple(
+    int(x) for x in _STR("EXAM_ATTENTION_LAYERS", "8").split(",") if x.strip()
+)
+ATTENTION_MAX_LEN = _INT("EXAM_ATTENTION_MAX_LEN", 4096)
+# Activation gate: threshold 0.4 scored best under LLM review (20.5/30).
+ATTENTION_GATE_THRESHOLD = _FLT("EXAM_ATTENTION_GATE", 0.4)
+ATTENTION_GATE_MAX_GAP = _INT("EXAM_ATTENTION_GAP", 3)
+ATTENTION_GATE_MIN_LEN = _INT("EXAM_ATTENTION_MINLEN", 2)
+# Fragment source: "attention" (default), "llm", or "both" for A/B comparison.
+FRAGMENT_SOURCE = _STR("EXAM_FRAGMENT_SOURCE", "attention")
