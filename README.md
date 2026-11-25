@@ -131,7 +131,7 @@ exam_analyzer/
 │   │   ├── _tables_student.py #   student_memory, knowledge_state, confusions, trajectory
 │   │   ├── _tables_analysis.py#   api_call_log, feedback, trends, signatures, cache...
 │   │   ├── _indexes.py        #   4 个索引定义
-│   │   └── _migrations.py     #   3 个版本化迁移
+│   │   └── _migrations.py     #   6 个版本化迁移
 │   ├── stores/                # 8 个领域 Store (继承 BaseStore)
 │   │   ├── base.py            #   BaseStore: _write / _read_one / _read_all / _write_locked
 │   │   ├── qa_store.py        #   qa_pairs (delete → insert → rename)
@@ -186,10 +186,11 @@ exam_analyzer/
 │   └── [其他模块]             # deepseek_client, embedding_cluster, models, utils 等
 ├── eval/                      # 质量评估
 │   └── feedback_agent.py      # 6 维度聊天质量评估
-├── tests/                     # 自动化测试 (222 个用例；手动集成脚本单独忽略)
+├── tests/                     # 自动化测试 (323 个用例；手动集成脚本单独忽略)
 │   ├── conftest.py            # Mock 基础设施
 │   ├── test_store_crud.py     # Store CRUD 测试
 │   ├── test_pure_functions.py # 纯函数测试
+│   ├── test_attention_pure.py # 投影注意力纯函数测试
 │   └── test_*.py              # 单元 + mock + 检索测试
 ├── input/                     # 试卷 PDF (gitignored)
 ├── intermediate/              # SQLite DB (gitignored)
@@ -346,7 +347,7 @@ Layer 3: 向量空间自组织
   → 学生记忆记录 + 对话历史持久化
 ```
 
-### 数据库表 (35 张)
+### 数据库表 (34 张)
 
 | 分组 | 表 |
 |------|----|
@@ -356,7 +357,7 @@ Layer 3: 向量空间自组织
 | 分析产出 (7) | `topic_dependencies`, `command_verb_patterns`, `topic_difficulty`, `knowledge_points`, `kp_edges`, `qa_kp_membership`, `exam_trends` |
 | 学生模型 (4) | `student_memory`, `student_knowledge_state`, `confusion_events`, `student_trajectory` |
 | 自适应与进化 (6) | `paper_signatures`, `dimension_baselines`, `diversity_signals`, `calibration_checks`, `correction_rules`, `evolution_history` |
-| 运维与缓存 (4) | `analysis_checkpoints`, `schema_version`, `distillation_cache`, `api_call_log` |
+| 运维与缓存 (3) | `analysis_checkpoints`, `schema_version`, `distillation_cache` |
 
 ### 关键设计决策
 
