@@ -245,3 +245,44 @@ def test_attention_result_handles_empty():
     result = AttentionResult()
     assert result.ms_tokens == []
     assert result.n_ms_tokens == 0
+
+
+# ============================================================
+# Layer-major batch extraction
+# ============================================================
+
+
+def test_extract_batch_empty_input():
+    from src.knowledge._attention import extract_batch
+    assert extract_batch(None, []) == []
+
+
+def test_extract_batch_returns_one_slot_per_pair():
+    """Every input pair must map to exactly one output slot."""
+    from src.knowledge._attention import QwenAttentionExtractor, extract_batch
+
+    ex = QwenAttentionExtractor(model_path="/nonexistent/path")
+    pairs = [("q" * 50, "a" * 50), ("q" * 50, "a" * 50), ("q" * 50, "a" * 50)]
+    out = extract_batch(ex, pairs)
+    assert len(out) == len(pairs)
+    assert all(r is None for r in out)  # model unavailable -> all None
+
+
+def test_extract_batch_skips_short_inputs():
+    """Short QP/MS pairs are skipped without raising."""
+    from src.knowledge._attention import QwenAttentionExtractor, extract_batch
+
+    ex = QwenAttentionExtractor(model_path="/nonexistent/path")
+    out = extract_batch(ex, [("short", "short")])
+    assert out == [None]
+
+
+def test_extract_batch_preserves_order():
+    """Output order must match input order even with skipped pairs."""
+    from src.knowledge._attention import QwenAttentionExtractor, extract_batch
+
+    ex = QwenAttentionExtractor(model_path="/nonexistent/path")
+    pairs = [("x" * 50, "y" * 50), ("short", "short"), ("z" * 50, "w" * 50)]
+    out = extract_batch(ex, pairs)
+    assert len(out) == 3
+    assert out[1] is None

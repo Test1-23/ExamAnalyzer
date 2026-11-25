@@ -9,7 +9,8 @@ from ._encoding import VectorEncoder, EmbeddingEncoder, VectorComparison
 from ._clustering import EmergentClusterer, ClusterConfig, CentroidSignal
 from .system import KpSystem
 from ._attention import (
-    AttentionResult, QwenAttentionExtractor, build_activation_units, gate_text,
+    AttentionResult, QwenAttentionExtractor, build_activation_units,
+    extract_batch, gate_text,
 )
 
 __all__ = [

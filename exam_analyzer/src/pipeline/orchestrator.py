@@ -53,7 +53,7 @@ from ..constants import (
 )
 
 from ..knowledge._attention import (
-    QwenAttentionExtractor, build_activation_units,
+    QwenAttentionExtractor, build_activation_units, extract_batch,
 )
 
 # ============================================================
@@ -361,8 +361,46 @@ def _run_kp_refinement(db, client, debug):
 # ============================================================
 
 
+def _precompute_attention_fragments(qa_pairs: list, debug: Callable) -> dict:
+    """Pre-compute attention fragments for a whole paper, layer-major.
+
+    Layer-major batching reads each model layer from disk once for the
+    entire paper instead of once per QA (4x faster on 50 QAs).  Returns a
+    map of question_number -> fragment list; QAs that produced nothing are
+    absent so the worker falls back to LLM extraction.
+    """
+    if (FRAGMENT_SOURCE or "attention").lower() not in ("attention", "both"):
+        return {}
+    extractor = QwenAttentionExtractor.shared()
+    if not extractor.available():
+        return {}
+
+    pairs = [(qa.question_text, qa.answer_text) for qa in qa_pairs]
+    try:
+        results = extract_batch(extractor, pairs)
+    except Exception as exc:  # pragma: no cover - runtime/GPU dependent
+        debug(f"  attention batch failed: {exc}")
+        return {}
+
+    out: dict = {}
+    for qa, result in zip(qa_pairs, results):
+        if result is None:
+            continue
+        units = build_activation_units(
+            result.tokens, result.scores, result.qp_end,
+            threshold=ATTENTION_GATE_THRESHOLD,
+            max_gap=ATTENTION_GATE_MAX_GAP,
+            min_len=ATTENTION_GATE_MIN_LEN,
+        )
+        if not units:
+            continue
+        out[qa.question_number] = units
+    debug(f"  attention batch: {len(out)}/{len(qa_pairs)} QAs produced units")
+    return out
+
 def _phase1_worker(qa: "QAPair", existing_topics: list | None,
-                    ctx: PipelineContext) -> int:
+                    ctx: PipelineContext,
+                    attention_units: dict | None = None) -> int:
     """Phase 1: summary → insert QA → extract MS fragments → assign topic."""
     t0 = time.time()
     summary, topic = _generate_summary(
@@ -379,9 +417,24 @@ def _phase1_worker(qa: "QAPair", existing_topics: list | None,
     ctx.db.qa.record_attempt(qa_id, success=True)
 
     try:
-        fragments = _extract_ms_fragments(
-            qa.answer_text, qa_id, ctx.client, ctx.debug,
-            question_text=qa.question_text)
+        precomputed = (attention_units or {}).get(qa.question_number)
+        if precomputed:
+            fragments = [
+                {
+                    "point_id": f"f_{qa_id}_{i}",
+                    "qa_id": qa_id,
+                    "point_text": u["text"],
+                    "marks": 1,
+                    "source": "attention",
+                    "attention_score": round(u["score"], 4),
+                    "token_span": f"{u['start']}:{u['end']}",
+                }
+                for i, u in enumerate(precomputed)
+            ]
+        else:
+            fragments = _extract_ms_fragments(
+                qa.answer_text, qa_id, ctx.client, ctx.debug,
+                question_text=qa.question_text)
         if fragments:
             with ctx.db.transaction():
                 ctx.db.fragment.insert_batch(fragments)
@@ -772,7 +825,11 @@ def run_pipeline(
             ctx = PipelineContext(client=client, db=db, debug=_debug,
                                     display_name=display_name,
                                     retriever=None, tracker=tracker)
-            _p1_worker = partial(_phase1_worker, existing_topics=existing_topics, ctx=ctx)
+            # Layer-major attention pre-computation: one disk pass per layer
+            # for the whole paper instead of one per QA.
+            attention_units = _precompute_attention_fragments(qa_pairs, _debug)
+            _p1_worker = partial(_phase1_worker, existing_topics=existing_topics,
+                                  ctx=ctx, attention_units=attention_units)
 
             tracker.step("QA pairing")
             _run_parallel(qa_pairs, _p1_worker, counters, "phase1_worker",

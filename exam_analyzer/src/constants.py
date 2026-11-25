@@ -126,9 +126,12 @@ KG_SEMANTIC_EDGE_MEDIUM_THRESHOLD = _FLT("EXAM_KG_SEMANTIC_EDGE_MEDIUM", 0.65)
 # ============================================================
 # Empty path disables the attention path entirely (LLM extraction is used).
 ATTENTION_MODEL_PATH = _STR("EXAM_ATTENTION_MODEL", "")
-# Comma-separated layer indices; layer 8 measured best after o_proj projection.
+# Comma-separated layer indices. Layer 0 (raw embedding attention) measured
+# best on 50 QAs: align 0.804, content-word ratio 0.605, 0% empty units.
+# Deeper layers lose word-level discrimination and L48 leaves 22% of QAs
+# with no activation at all.
 ATTENTION_LAYERS = tuple(
-    int(x) for x in _STR("EXAM_ATTENTION_LAYERS", "8").split(",") if x.strip()
+    int(x) for x in _STR("EXAM_ATTENTION_LAYERS", "0").split(",") if x.strip()
 )
 ATTENTION_MAX_LEN = _INT("EXAM_ATTENTION_MAX_LEN", 4096)
 # Activation gate: threshold 0.4 scored best under LLM review (20.5/30).
@@ -137,3 +140,6 @@ ATTENTION_GATE_MAX_GAP = _INT("EXAM_ATTENTION_GAP", 3)
 ATTENTION_GATE_MIN_LEN = _INT("EXAM_ATTENTION_MINLEN", 2)
 # Fragment source: "attention" (default), "llm", or "both" for A/B comparison.
 FRAGMENT_SOURCE = _STR("EXAM_FRAGMENT_SOURCE", "attention")
+# Layer-major batching: process all QAs layer-by-layer so each layer is
+# read from disk once. 4x faster than QA-major on 50 QAs.
+ATTENTION_BATCH_SIZE = _INT("EXAM_ATTENTION_BATCH", 32)
