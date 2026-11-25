@@ -286,3 +286,54 @@ def test_extract_batch_preserves_order():
     out = extract_batch(ex, pairs)
     assert len(out) == 3
     assert out[1] is None
+
+
+def test_cross_alignment_matches_full_projection():
+    """cross_alignment_scores must equal alignment_scores(projected_attention)."""
+    from src.knowledge._attention import (
+        alignment_scores, cross_alignment_scores, projected_attention,
+    )
+
+    rng = np.random.default_rng(11)
+    for n_tok, qp_end in ((60, 25), (150, 60)):
+        n_heads, head_dim, hidden = 3, 8, 16
+        attn = rng.random((n_heads, n_tok, n_tok)).astype(np.float32)
+        attn /= attn.sum(-1, keepdims=True)
+        values = rng.random((n_heads, n_tok, head_dim)).astype(np.float32)
+        w_o = rng.random((n_heads, head_dim, hidden)).astype(np.float32)
+        tokens = ["graph"] * n_tok
+        for i in range(0, n_tok, 3):
+            tokens[i] = "the"
+
+        full = alignment_scores(projected_attention(attn, values, w_o), qp_end, tokens)
+        cross = cross_alignment_scores(attn, values, w_o, qp_end, tokens)
+        assert np.allclose(full, cross, atol=1e-5)
+
+
+def test_cross_alignment_handles_degenerate_bounds():
+    from src.knowledge._attention import cross_alignment_scores
+
+    rng = np.random.default_rng(12)
+    attn = rng.random((2, 10, 10)).astype(np.float32)
+    values = rng.random((2, 10, 4)).astype(np.float32)
+    w_o = rng.random((2, 4, 8)).astype(np.float32)
+    tokens = ["graph"] * 10
+    assert len(cross_alignment_scores(attn, values, w_o, 0, tokens)) == 0
+    assert len(cross_alignment_scores(attn, values, w_o, 10, tokens)) == 0
+
+
+def test_cross_alignment_returns_normalised_scores():
+    from src.knowledge._attention import cross_alignment_scores
+
+    rng = np.random.default_rng(13)
+    n_tok, qp_end = 40, 15
+    attn = rng.random((2, n_tok, n_tok)).astype(np.float32)
+    attn /= attn.sum(-1, keepdims=True)
+    values = rng.random((2, n_tok, 4)).astype(np.float32)
+    w_o = rng.random((2, 4, 8)).astype(np.float32)
+    tokens = ["graph"] * n_tok
+
+    scores = cross_alignment_scores(attn, values, w_o, qp_end, tokens)
+    assert len(scores) == n_tok - qp_end
+    assert scores.max() == pytest.approx(1.0, abs=1e-5)
+    assert np.all(scores >= 0)

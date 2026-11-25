@@ -109,6 +109,7 @@ python tests/_manual_suite.py chat     # 聊天端点测试
 | Web | Flask + Jinja2 |
 | 事件总线 | Node.js + WebSocket（跨模块解耦，manifest 合约） |
 | 向量编码器 | 可插拔接口（EmbeddingEncoder 当前，SaeEncoder 预留） |
+| 注意力（可选） | Qwen3-32B 本地推理，输出投影 `W_o`，第 0 层，层主序批处理 |
 
 ### 目录结构
 
@@ -144,6 +145,7 @@ exam_analyzer/
 │   ├── knowledge/             # 知识点子系统 (Mygo 新建)
 │   │   ├── _encoding.py       #   VectorEncoder ABC + EmbeddingEncoder
 │   │   ├── _clustering.py     #   EmergentClusterer: 涌现聚类, 自适应阈值
+│   │   ├── _attention.py      #   QwenAttentionExtractor: 投影注意力 → 得分点
 │   │   └── system.py          #   KpSystem: 统一入口 facade
 │   ├── analysis/              # 后处理分析 (Mygo refactor: diagnostics + offline 合并)
 │   │   ├── _cascade.py        #   Topic 分裂/合并 + 向量级联
@@ -260,6 +262,45 @@ KpSystem (统一入口)
   └─ on_paper_completed(): 衰减检查 + 质量晋升 + 事件发布
 ```
 
+### 注意力驱动的得分点切分 (Mygo-007/008)
+
+评分方案的得分点切分原本只依赖 LLM。新增一条本地注意力路径：把题目卷与评分方案拼接成单个输入，用 Qwen3 计算跨段注意力，取出评分方案侧被题目对齐的 token 作为得分点。
+
+**为什么需要投影。** 原始注意力 `A_h[i,j]` 是 softmax 权重，只表示「头 h 认为 token i 应关注 token j」，不含该信息对输出的实际贡献。功能词与所有词强相关，权重高但贡献小，导致原始跨段对齐率仅 0.313，低于随机基线 0.512。经输出投影矩阵 `W_o` 变换后：
+
+```
+P[i,j] = || Σ_h A_h[i,j] · (V_h[j] @ W_o,h) ||
+```
+
+对齐率升至 0.804（50 题均值），0% 的题目完全无激活。
+
+**为什么用第 0 层。** 层扫描（50 题，L0/L8/L32/L48）显示第 0 层最优，因为此时 token 表征仍保留词形与词义信息，而 QP→MS 对齐需要的正是词级语义匹配；深层表征被上下文化后词间区分度下降。
+
+| 层 | 对齐率 | 实词比例 | 空激活率 | 激活字符数 |
+|---|---|---|---|---|
+| **L0** | **0.804** | **0.605** | **0%** | **306** |
+| L8 | 0.633 | 0.506 | 2% | 153 |
+| L32 | 0.439 | 0.403 | 4% | 216 |
+| L48 | 0.663 | 0.460 | 22% | 92 |
+
+对齐率单独看会误导：L48 的对齐率 0.663 不低，但 22% 的题目完全没有激活——对齐率只衡量「激活的内容有多好」，不衡量「激活了多少」。因此评估必须辅以人工检查。
+
+**层主序批处理。** Transformer 层在单条序列内严格串行，单个 QA 无法复用某层；但跨 QA 可以：先让第 N 层跑完所有 QA，再加载第 N+1 层，每层只从磁盘读一次。50 题 × 64 层的实测为 53 分钟（对比逐题处理的 3.6 小时），峰值内存 14 GB 而非 53 GB。
+
+**GPU 侧投影。** 把注意力矩阵搬回主机再投影，需要传输 (64, T, T) 约 200 MB，且 einsum 在 CPU 上跑。改为在张量仍驻留显存时投影，只回传 (n_ms,) 的分数向量，实测 0.11 秒/题（原 13.9 秒），数值误差 2.4e-07。
+
+**质量现状与默认值。** 激活单元是「注意力峰值」而非「评分点」，直接作为 fragments 时质量显著低于 LLM 抽取：在 6 题黄金集上 p×c 仅 0.19，而 LLM 路径为 0.99（见 `docs/research/production-attention-quality-audit.md`，本地工作记录）。原因是阈值化丢弃了约 70% 文本（齐全度 0.37），且未清洗的 `MP1`、页眉等噪声会被注意力如实对齐出来。**因此 `FRAGMENT_SOURCE` 默认仍为 `llm`**，注意力路径保留为可选：本地推理、无 API 成本、离线可用，也可通过 `both` 做 A/B 对比。
+
+**可选依赖与降级。** torch / safetensors / transformers 与模型权重均为可选；缺失时 `QwenAttentionExtractor.available()` 返回 False，流水线自动回退到 LLM 抽取。
+
+```bash
+# 启用注意力路径
+export EXAM_ATTENTION_MODEL="/path/to/qwen3-32b"
+export EXAM_ATTENTION_LAYERS="0"        # 默认
+export EXAM_ATTENTION_GATE="0.4"        # 激活阈值
+export EXAM_FRAGMENT_SOURCE="attention" # 默认 llm；attention|llm|both
+```
+
 ### 行为驱动的自组织知识图谱 (Phase 1-4)
 
 ```
@@ -341,6 +382,37 @@ Layer 3: 向量空间自组织
 - **Pitfalls 为推论**：系统无真实学生错题数据，陷阱来自 Phase 2 失分推断
 - **行为数据冷启动**：前 2 份试卷期间 Fragment 迁移和 Topic 演化受限，知识结构质量随数据积累提升
 - **Embedding 仅辅助**：仅用于冷启动临时分组，不作为主要聚类信号
+- **注意力路径需本地模型且质量未达 LLM**：Qwen3-32B 权重约 65 GB；作为 fragments 时 p×c 约 0.19（LLM 为 0.99），因此默认 `FRAGMENT_SOURCE=llm`
+- **对齐率不是充分指标**：对齐率高的层可能大面积无激活（L48 对齐率 0.663 但有 22% 题目完全无激活），评估需辅以人工检查
+
+## 研究与论文
+
+本仓库的切分方法研究见 [`paper/README.md`](paper/README.md)：
+
+**《知识点切分中的两次迁移——从几何代理指标到直接指标，从隐藏层到投影注意力》**
+
+> 全文：[paper-two-migrations.pdf](paper/paper-two-migrations.pdf) / [paper-two-migrations.docx](paper/paper-two-migrations.docx)
+
+论文报告该任务上评价指标与技术路线的两次调整：
+
+1. **评价指标的迁移。** 四类几何代理指标（概念分离度 d'、轮廓系数、簇内一致性、片段自足性）与切分质量无可靠关联，其中 d' 与质量负相关（d' 最高者切分最差）。改用人工评分的三项直接指标（纯度、齐全度、单一性）后，优化方向才明确。
+2. **技术路线的迁移。** 从基于评分结构的切分，经嵌入聚类与编码器隐藏层，最终转向大模型注意力；关键突破是将多头注意力经输出投影矩阵 `W_o` 变换，使题目—答案对齐率从 0.313 提升至 0.722，30 题规模验证为 0.760。
+
+最终切分方法达到纯度 0.942、齐全度 1.000、单一性 0.983，综合分 p×c×s = 0.926。
+
+研究过程的完整实验记录保存在本地工作目录 `docs/research/`（该目录不入库）。与本实现直接相关的几篇：
+
+| 文档（本地 `docs/research/`） | 内容 |
+|---|---|
+| `projected-attention.md` | 输出投影使对齐率从 0.313 升至 0.722 |
+| `qpms-cross-attention.md` | 题目—评分方案跨段注意力分析 |
+| `scale-test-30qa.md` | 30 题规模验证 |
+| `scale50-manual-inspection.md` | 50 题规模验证与人工检查（确定默认层为 L0） |
+| `depth-curve-single-vs-multi.md` | 真·单层与多层上下文对比 |
+| `late-layers-test.md` | 后半层（L32/L40/L48）测试 |
+| `nocat-attention-segmentation.md` | 禁止拼接的切分（单一性 0.703 → 0.983） |
+| `activation-formalization.md` | 激活 token 的聚类与 LLM 门控 |
+| `production-attention-quality-audit.md` | 生产路径质量核实：注意力片段 p×c 0.19 vs LLM 0.99 |
 
 ## 开发
 

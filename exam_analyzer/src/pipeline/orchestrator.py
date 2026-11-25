@@ -49,6 +49,7 @@ from ..constants import (
     HELP_DIRECT_THRESHOLD, HELP_UNDERSTANDING_THRESHOLD,
     SEASON_MAP, YEAR_BASE_OFFSET,
     ATTENTION_GATE_THRESHOLD, ATTENTION_GATE_MAX_GAP, ATTENTION_GATE_MIN_LEN,
+    ATTENTION_BATCH_SIZE,
     FRAGMENT_SOURCE,
 )
 
@@ -183,7 +184,7 @@ def _extract_ms_fragments(answer_text: str, qa_id: int, client, debug: Callable,
       "llm"       - LLM only
       "both"      - run both, keep attention fragments (LLM result logged)
     """
-    source = (FRAGMENT_SOURCE or "attention").lower()
+    source = (FRAGMENT_SOURCE or "llm").lower()
 
     if source in ("attention", "both"):
         att = _attention_fragments(question_text, answer_text, qa_id, debug)
@@ -365,38 +366,49 @@ def _precompute_attention_fragments(qa_pairs: list, debug: Callable) -> dict:
     """Pre-compute attention fragments for a whole paper, layer-major.
 
     Layer-major batching reads each model layer from disk once for the
-    entire paper instead of once per QA (4x faster on 50 QAs).  Returns a
-    map of question_number -> fragment list; QAs that produced nothing are
-    absent so the worker falls back to LLM extraction.
+    entire paper instead of once per QA (4x faster on 50 QAs).  Papers
+    larger than ATTENTION_BATCH_SIZE are processed in chunks so peak
+    memory stays bounded.
+
+    Returns a map of question_number -> fragment list; QAs that produced
+    nothing are absent so the worker falls back to LLM extraction.
     """
-    if (FRAGMENT_SOURCE or "attention").lower() not in ("attention", "both"):
+    if (FRAGMENT_SOURCE or "llm").lower() not in ("attention", "both"):
         return {}
     extractor = QwenAttentionExtractor.shared()
     if not extractor.available():
         return {}
 
-    pairs = [(qa.question_text, qa.answer_text) for qa in qa_pairs]
-    try:
-        results = extract_batch(extractor, pairs)
-    except Exception as exc:  # pragma: no cover - runtime/GPU dependent
-        debug(f"  attention batch failed: {exc}")
-        return {}
-
+    size = max(1, ATTENTION_BATCH_SIZE)
     out: dict = {}
-    for qa, result in zip(qa_pairs, results):
-        if result is None:
+    total = len(qa_pairs)
+    for start in range(0, total, size):
+        chunk = qa_pairs[start:start + size]
+        pairs = [(qa.question_text, qa.answer_text) for qa in chunk]
+        try:
+            results = extract_batch(extractor, pairs)
+        except Exception as exc:  # pragma: no cover - runtime/GPU dependent
+            debug(f"  attention batch failed (QAs {start}-{start + len(chunk)}): {exc}")
             continue
-        units = build_activation_units(
-            result.tokens, result.scores, result.qp_end,
-            threshold=ATTENTION_GATE_THRESHOLD,
-            max_gap=ATTENTION_GATE_MAX_GAP,
-            min_len=ATTENTION_GATE_MIN_LEN,
-        )
-        if not units:
-            continue
-        out[qa.question_number] = units
-    debug(f"  attention batch: {len(out)}/{len(qa_pairs)} QAs produced units")
+
+        for qa, result in zip(chunk, results):
+            if result is None:
+                continue
+            units = build_activation_units(
+                result.tokens, result.scores, result.qp_end,
+                threshold=ATTENTION_GATE_THRESHOLD,
+                max_gap=ATTENTION_GATE_MAX_GAP,
+                min_len=ATTENTION_GATE_MIN_LEN,
+            )
+            if units:
+                out[qa.question_number] = units
+
+        if total > size:
+            debug(f"  attention batch: {min(start + size, total)}/{total} QAs done")
+
+    debug(f"  attention batch: {len(out)}/{total} QAs produced units")
     return out
+
 
 def _phase1_worker(qa: "QAPair", existing_topics: list | None,
                     ctx: PipelineContext,

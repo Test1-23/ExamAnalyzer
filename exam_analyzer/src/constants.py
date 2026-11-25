@@ -138,8 +138,15 @@ ATTENTION_MAX_LEN = _INT("EXAM_ATTENTION_MAX_LEN", 4096)
 ATTENTION_GATE_THRESHOLD = _FLT("EXAM_ATTENTION_GATE", 0.4)
 ATTENTION_GATE_MAX_GAP = _INT("EXAM_ATTENTION_GAP", 3)
 ATTENTION_GATE_MIN_LEN = _INT("EXAM_ATTENTION_MINLEN", 2)
-# Fragment source: "attention" (default), "llm", or "both" for A/B comparison.
-FRAGMENT_SOURCE = _STR("EXAM_FRAGMENT_SOURCE", "attention")
+# Fragment source: "llm" (default), "attention", or "both".
+#
+# The attention path is fast, local and free, but its activation units are
+# verbatim attention peaks rather than complete scoring points: on the 6-QA
+# golden set they leak mark markers (MP1), page furniture and single words.
+# Measured purity x completeness is ~0.2-0.4 vs 0.96 for LLM extraction.
+# Keep "llm" as the default; opt into "attention" only when API cost or
+# offline operation outweighs fragment quality.
+FRAGMENT_SOURCE = _STR("EXAM_FRAGMENT_SOURCE", "llm")
 # Layer-major batching: process all QAs layer-by-layer so each layer is
 # read from disk once. 4x faster than QA-major on 50 QAs.
 ATTENTION_BATCH_SIZE = _INT("EXAM_ATTENTION_BATCH", 32)
